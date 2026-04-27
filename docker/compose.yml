@@ -26,5 +26,12 @@ services:
     <<: *base
     command: ["bash", "-lc", "scripts/_build-pico-inner.sh"]
 
+  flash:
+    <<: *base
+    user: "0"
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    command: ["bash", "-lc", "scripts/_flash-inner.sh ${ELF:-firmware/build/firmware.elf}"]
+
 volumes:
   sfr-ccache:
