@@ -26,3 +26,4 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+29-soft-FPGA-reversi.code-workspace
