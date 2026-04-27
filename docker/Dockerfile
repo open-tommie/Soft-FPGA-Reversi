@@ -7,15 +7,21 @@ ARG USER_GID=1000
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates git python3 \
+        ca-certificates curl git python3 \
         build-essential cmake ninja-build pkg-config \
-        gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
         libusb-1.0-0-dev libhidapi-dev libftdi-dev \
         autoconf automake libtool texinfo \
         flex bison libfl-dev help2man perl perl-doc \
         usbutils \
         ccache \
     && rm -rf /var/lib/apt/lists/*
+
+# arm-none-eabi-gcc は Pico VSCode extension が配る xPack 14.2 に揃える
+# (apt の 13.2 だと newlib 差で Verilator ランタイムがリンクできない)
+ARG XPACK_ARM_GCC_VER=14.2.1-1.1
+RUN curl -fsSL "https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v${XPACK_ARM_GCC_VER}/xpack-arm-none-eabi-gcc-${XPACK_ARM_GCC_VER}-linux-x64.tar.gz" \
+        | tar -xz -C /opt \
+    && ln -s /opt/xpack-arm-none-eabi-gcc-${XPACK_ARM_GCC_VER} /opt/arm-gcc
 
 RUN git clone --branch ${PICO_SDK_TAG} --depth 1 \
         https://github.com/raspberrypi/pico-sdk.git /opt/pico-sdk \
@@ -35,7 +41,7 @@ RUN mkdir /tmp/openocd && cd /tmp/openocd \
     && make install \
     && cd / && rm -rf /tmp/openocd
 
-ARG VERILATOR_TAG=v5.048
+ARG VERILATOR_TAG=v5.040
 RUN git clone --branch ${VERILATOR_TAG} --depth 1 \
         https://github.com/verilator/verilator.git /tmp/verilator \
     && cd /tmp/verilator \
@@ -48,8 +54,9 @@ RUN git clone --branch ${VERILATOR_TAG} --depth 1 \
 ENV PICO_SDK_PATH=/opt/pico-sdk \
     PICO_PLATFORM=rp2350 \
     PICO_BOARD=pico2 \
+    PICO_TOOLCHAIN_PATH=/opt/arm-gcc \
     CCACHE_DIR=/ccache \
-    PATH=/usr/lib/ccache:/usr/local/bin:/usr/bin:/bin
+    PATH=/usr/lib/ccache:/opt/arm-gcc/bin:/usr/local/bin:/usr/bin:/bin
 
 RUN if ! getent group ${USER_GID} >/dev/null; then groupadd -g ${USER_GID} dev; fi \
     && if ! id -u ${USER_UID} >/dev/null 2>&1; then \
