@@ -1,0 +1,28 @@
+# Build
+build/
+obj_dir/
+*.o
+*.a
+*.uf2
+*.elf
+*.elf.map
+*.bin
+*.hex
+*.dis
+
+# Verilator
+*.vcd
+*.fst
+sim_build/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
