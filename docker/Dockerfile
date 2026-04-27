@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
         libusb-1.0-0-dev libhidapi-dev libftdi-dev \
         autoconf automake libtool texinfo \
+        flex bison libfl-dev help2man perl perl-doc \
         usbutils \
         ccache \
     && rm -rf /var/lib/apt/lists/*
@@ -33,6 +34,16 @@ RUN mkdir /tmp/openocd && cd /tmp/openocd \
     && make -j"$(nproc)" \
     && make install \
     && cd / && rm -rf /tmp/openocd
+
+ARG VERILATOR_TAG=v5.048
+RUN git clone --branch ${VERILATOR_TAG} --depth 1 \
+        https://github.com/verilator/verilator.git /tmp/verilator \
+    && cd /tmp/verilator \
+    && autoconf \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make install \
+    && cd / && rm -rf /tmp/verilator
 
 ENV PICO_SDK_PATH=/opt/pico-sdk \
     PICO_PLATFORM=rp2350 \
