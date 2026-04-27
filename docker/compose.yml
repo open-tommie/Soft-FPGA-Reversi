@@ -1,0 +1,30 @@
+name: sfr
+
+x-base: &base
+  image: sfr-dev:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      USER_UID: ${USER_UID:-1000}
+      USER_GID: ${USER_GID:-1000}
+  volumes:
+    - ../:/work
+    - sfr-ccache:/ccache
+  working_dir: /work
+  environment:
+    - CCACHE_DIR=/ccache
+
+services:
+  dev:
+    <<: *base
+    tty: true
+    stdin_open: true
+    command: ["bash"]
+
+  firmware:
+    <<: *base
+    command: ["bash", "-lc", "scripts/_build-pico-inner.sh"]
+
+volumes:
+  sfr-ccache:
