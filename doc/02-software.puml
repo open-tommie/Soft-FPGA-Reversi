@@ -1,0 +1,55 @@
+@startuml 02-software
+title ソフトウェア構成図 (Bootstrap Step 1: Hello UF2)
+
+skinparam defaultFontName "Noto Sans CJK JP"
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam linetype ortho
+skinparam package {
+  BackgroundColor #FAFAFA
+  BorderColor #555
+}
+skinparam component {
+  BackgroundColor #EEF6FF
+  BorderColor #336699
+}
+skinparam artifact {
+  BackgroundColor #FFF6E0
+  BorderColor #B58A00
+}
+
+package "ホスト PC (Linux / WSL2)" as PC {
+  component "scripts/build-pico.sh" as Build
+  artifact  "firmware.uf2" as UF2
+  component "BOOTSEL マウント\n(/media/RPI-RP2)" as Mount
+  component "minicom / screen\n@ /dev/ttyACM0 115200" as Term
+
+  Build -down-> UF2
+  UF2 -down-> Mount : D&D
+}
+
+package "Pico 2 ファームウェア (RP2350)" as Pico {
+  component "main.cpp\n(printf ループ)" as App
+  component "Pico SDK\n(stdlib / stdio_usb)" as SDK
+  component "TinyUSB CDC" as CDC
+  component "ROM Bootloader\n(BOOTSEL → MSC)" as Boot
+
+  App  -down-> SDK   : printf
+  SDK  -down-> CDC   : stdio_usb
+}
+
+Mount ..[#aa3333]..> Boot : UF2 を MSC 書き込み
+Boot  ..[#aa3333]..> App  : フラッシュ後\n再起動 → main()
+CDC   .[#cc6600].> Term  : "Hello, world!\\n"\n(1 秒周期)
+
+note bottom of PC
+  ビルドは Pico SDK + arm-none-eabi-gcc。
+  生成は CMake (Ninja) で firmware/build/ 以下に出力。
+end note
+
+note bottom of Pico
+  この段階では Verilog / Verilator 由来の
+  C++ は未リンク。flash / SRAM のベースラインを計測する。
+end note
+
+@enduml

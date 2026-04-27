@@ -27,3 +27,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 29-soft-FPGA-reversi.code-workspace
+01-README.md
+
+# Claude Code (個人環境用)
+.claude/

@@ -1,0 +1,55 @@
+@startuml 01-hardware
+title ハードウェア構成図 (Bootstrap Step 1)
+
+skinparam defaultFontName "Noto Sans CJK JP"
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam linetype polyline
+skinparam node {
+  BackgroundColor #FAFAFA
+  BorderColor #555
+}
+skinparam rectangle {
+  BackgroundColor #F0F0F0
+  BorderColor #888
+}
+
+node "ホスト PC" as PC {
+  rectangle "USB ポート 1" as PCUSB1
+  rectangle "USB ポート 2" as PCUSB2
+}
+
+node "Raspberry Pi\nDebug Probe" as Probe {
+  rectangle "USB コネクタ\n(micro-USB)" as ProbeUSB
+  rectangle "SWD ポート\n(JST-SH 3 ピン)" as ProbeSWD
+  rectangle "UART ポート\n(JST-SH 3 ピン)" as ProbeUART
+}
+
+node "Raspberry Pi Pico 2" as Pico {
+  rectangle "USB コネクタ\n(micro-USB)" as PicoUSB
+  rectangle "SWD コネクタ\n(JST-SH 3 ピン)\nSWCLK / GND / SWDIO" as PicoSWD
+  rectangle "UART0\n(GP0=TX / GP1=RX / GND)" as PicoUART
+}
+
+PCUSB1   -[#336699,thickness=4]- PicoUSB    : USB ケーブル①\n電源 + データ\n+ UF2 書き込み
+PCUSB2   -[#336699,thickness=4]- ProbeUSB   : USB ケーブル②
+ProbeSWD -[#aa3333,thickness=3]- PicoSWD    : SWD 3 線\n(デバッグ /\n フラッシュ書込)
+ProbeUART -[#cc6600,thickness=3]- PicoUART  : UART 3 線\n(任意)
+
+PicoUSB  -[hidden]- PicoSWD
+PicoSWD  -[hidden]- PicoUART
+ProbeUSB -[hidden]- ProbeSWD
+ProbeSWD -[hidden]- ProbeUART
+PCUSB1   -[hidden]- PCUSB2
+
+note bottom of Pico
+  Step 1 では USB 経由のみで Hello UF2 を確認できる。
+  Debug Probe は SWD によるブレークポイント・printf 経路の冗長化に使う。
+end note
+
+note bottom of PC
+  WSL2 から扱う場合は usbipd-win で
+  Pico / Debug Probe を個別にアタッチする。
+end note
+
+@enduml
