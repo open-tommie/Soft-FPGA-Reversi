@@ -51,6 +51,20 @@ RUN git clone --branch ${VERILATOR_TAG} --depth 1 \
     && make install \
     && cd / && rm -rf /tmp/verilator
 
+# bloaty: ELF サイズ調査ツール (Google)。Ubuntu 24.04 apt に無いのでソースビルド。
+# v1.1 (2020) は古すぎてビルド通らないことがあるため main の固定 SHA を採用。
+ARG BLOATY_REV=04bca29ffdd781de1bff5b751e0d5459c844a596
+RUN mkdir /tmp/bloaty && cd /tmp/bloaty \
+    && git init -q \
+    && git remote add origin https://github.com/google/bloaty.git \
+    && git fetch --depth 1 -q origin ${BLOATY_REV} \
+    && git checkout -q FETCH_HEAD \
+    && git submodule update --init --depth 1 \
+    && cmake -B build -G Ninja -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j"$(nproc)" \
+    && cmake --install build \
+    && cd / && rm -rf /tmp/bloaty
+
 ENV PICO_SDK_PATH=/opt/pico-sdk \
     PICO_PLATFORM=rp2350 \
     PICO_BOARD=pico2 \
