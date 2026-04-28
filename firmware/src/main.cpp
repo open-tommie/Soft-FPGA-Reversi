@@ -29,10 +29,6 @@ void tick(Vothello_top* dut) {
 void apply_reset(Vothello_top* dut) {
     dut->rst = 1;
     dut->rx_valid = 0;
-    // legal_bb 用の dbg_* 入力も 0 で初期化 (Step 5 で proto と結線するまでの暫定)。
-    dut->dbg_black = 0;
-    dut->dbg_white = 0;
-    dut->dbg_side = 0;
     for (int i = 0; i < 4; ++i) tick(dut);
     dut->rst = 0;
 }

@@ -10,6 +10,6 @@ VERILOG_SOURCES := $(RTL_DIR)/proto.v
 TOPLEVEL := proto
 MODULE   := test_proto
 
-EXTRA_ARGS += --no-timing -Wno-fatal
+EXTRA_ARGS += --no-timing -Wno-fatal -y $(RTL_DIR)
 
 include $(shell cocotb-config --makefiles)/Makefile.sim

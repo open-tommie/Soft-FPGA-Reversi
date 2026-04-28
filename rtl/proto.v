@@ -75,6 +75,70 @@ module proto (
     wire is_pi = (buf_len == 8'd2) && (buf_mem[0] == "P") && (buf_mem[1] == "I");
     wire is_ve = (buf_len == 8'd2) && (buf_mem[0] == "V") && (buf_mem[1] == "E");
 
+    // ----- Step 5d-1: 内部状態 + 計算モジュール群を instantiate -----
+    // この段階ではまだ FSM から駆動しない (cmd_* は全部 0)。次段で結線。
+
+    // game_state: 盤面 + my_side + phase
+    reg         gs_cmd_init;
+    reg         gs_init_side;
+    reg         gs_cmd_set_board;
+    reg [63:0]  gs_in_black;
+    reg [63:0]  gs_in_white;
+    reg         gs_cmd_set_phase;
+    reg [1:0]   gs_in_phase;
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire [63:0] gs_black;
+    wire [63:0] gs_white;
+    wire        gs_my_side;
+    wire [1:0]  gs_phase;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    game_state u_game_state (
+        .clk(clk), .rst(rst),
+        .cmd_init(gs_cmd_init), .init_side(gs_init_side),
+        .cmd_set_board(gs_cmd_set_board),
+        .in_black(gs_in_black), .in_white(gs_in_white),
+        .cmd_set_phase(gs_cmd_set_phase), .in_phase(gs_in_phase),
+        .black(gs_black), .white(gs_white),
+        .my_side(gs_my_side), .phase(gs_phase)
+    );
+
+    // legal_bb: gs の現在盤面 + my_side で合法手 bitboard を出す
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire [63:0] lb_legal;
+    /* verilator lint_on UNUSEDSIGNAL */
+    legal_bb u_legal_bb (
+        .black(gs_black), .white(gs_white),
+        .side(gs_my_side), .legal(lb_legal)
+    );
+
+    // pick_lsb: legal の中で最下位 set bit を選ぶ
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire        ps_valid;
+    wire [5:0]  ps_index;
+    wire [63:0] ps_one_hot;
+    /* verilator lint_on UNUSEDSIGNAL */
+    pick_lsb u_pick_lsb (
+        .in_bits(lb_legal),
+        .valid(ps_valid), .index(ps_index), .one_hot(ps_one_hot)
+    );
+
+    // coord: parse 用は MO 受信時に buf_mem の [2..3] を渡す予定。
+    //        format 用は pick_lsb の index を渡し、自分の手の文字列を得る。
+    //        Step 5d-1 では parse 入力は 0 固定 (まだ使わない)。
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire [5:0] cd_parse_bit;
+    wire       cd_parse_valid;
+    wire [7:0] cd_col_char;
+    wire [7:0] cd_row_char;
+    /* verilator lint_on UNUSEDSIGNAL */
+    coord u_coord (
+        .in_col_char(8'h00), .in_row_char(8'h00),
+        .parse_bit(cd_parse_bit), .parse_valid(cd_parse_valid),
+        .in_bit_index(ps_index),
+        .out_col_char(cd_col_char), .out_row_char(cd_row_char)
+    );
+
     always @(posedge clk) begin
         if (rst) begin
             buf_len  <= 0;
@@ -83,8 +147,20 @@ module proto (
             tx_byte  <= 0;
             tx_idx   <= 0;
             tx_end   <= 0;
+            // 5d-1: game_state コマンドはまだ FSM から駆動しない
+            gs_cmd_init      <= 0;
+            gs_init_side     <= 0;
+            gs_cmd_set_board <= 0;
+            gs_in_black      <= 0;
+            gs_in_white      <= 0;
+            gs_cmd_set_phase <= 0;
+            gs_in_phase      <= 0;
         end else begin
             tx_valid <= 0;  // デフォルト下げ。S_TX で必要なときだけ立てる。
+            // 5d-1: game_state コマンドは毎 cycle 0 に戻す (1-cycle pulse 想定)
+            gs_cmd_init      <= 0;
+            gs_cmd_set_board <= 0;
+            gs_cmd_set_phase <= 0;
             case (state)
                 S_RECV: begin
                     if (rx_valid) begin
