@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # rtl/ の Verilog だけを syntax + lint チェック (Docker 抜きで素早く)
+  lint-rtl:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator
+
+      - name: Verilator lint-only
+        run: |
+          # rtl/ 配下の全 Verilog に対して --lint-only。
+          # Pico 向けビルドと違い verilator ランタイムは要らない。
+          for v in rtl/*.v rtl/*.sv; do
+            [ -e "$v" ] || continue
+            verilator --lint-only -Wall -Wno-DECLFILENAME "$v"
+          done
+
+  # firmware を Docker イメージで実ビルド (組合せ全体の回帰)
+  build-firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # docker buildx は Actions runner 標準セットアップで使える
+      - name: Build sfr-dev image
+        run: |
+          USER_UID=$(id -u) USER_GID=$(id -g) \
+              docker compose -f docker/compose.yml build dev
+
+      - name: Build firmware
+        run: ./scripts/build-pico.sh
+
+      - name: Show binary size
+        run: |
+          docker compose -f docker/compose.yml run --rm dev \
+              arm-none-eabi-size firmware/build/firmware.elf
+
+      - name: Upload UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-uf2
+          path: firmware/build/firmware.uf2
+          retention-days: 14

@@ -33,5 +33,21 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     command: ["bash", "-lc", "scripts/_flash-inner.sh ${ELF:-firmware/build/firmware.elf}"]
 
+  test-unit:
+    <<: *base
+    # Verilator + cocotb のユニット検証。Pico SDK / USB は使わない。
+    # 名前付きボリュームの初期 owner が root なので test-hil と同じく root 実行。
+    user: "0"
+    volumes:
+      - ../:/work
+      - sfr-ccache:/ccache
+      - sfr-unit-venv:/opt/unit-venv
+    environment:
+      - CCACHE_DIR=/ccache
+      - PIP_CACHE_DIR=/ccache/pip
+    entrypoint: ["scripts/_test-unit-inner.sh"]
+    command: []
+
 volumes:
   sfr-ccache:
+  sfr-unit-venv:
