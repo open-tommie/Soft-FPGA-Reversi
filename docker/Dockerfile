@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # arm-none-eabi-gcc は Pico VSCode extension が配る xPack 14.2 に揃える
 # (apt の 13.2 だと newlib 差で Verilator ランタイムがリンクできない)
-ARG XPACK_ARM_GCC_VER=14.2.1-1.1
+ARG XPACK_ARM_GCC_VER=15.2.1-1.1
 RUN curl -fsSL "https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v${XPACK_ARM_GCC_VER}/xpack-arm-none-eabi-gcc-${XPACK_ARM_GCC_VER}-linux-x64.tar.gz" \
         | tar -xz -C /opt \
     && ln -s /opt/xpack-arm-none-eabi-gcc-${XPACK_ARM_GCC_VER} /opt/arm-gcc
@@ -41,7 +41,7 @@ RUN mkdir /tmp/openocd && cd /tmp/openocd \
     && make install \
     && cd / && rm -rf /tmp/openocd
 
-ARG VERILATOR_TAG=v5.040
+ARG VERILATOR_TAG=v5.048
 RUN git clone --branch ${VERILATOR_TAG} --depth 1 \
         https://github.com/verilator/verilator.git /tmp/verilator \
     && cd /tmp/verilator \
