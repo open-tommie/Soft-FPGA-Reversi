@@ -37,10 +37,27 @@ module proto (
     reg [BUF_LOG2:0]        buf_len;           // 0..BUF_SIZE (8 bit)
 
     // ----- FSM -----
-    localparam [1:0] S_RECV     = 2'd0,
-                     S_DISPATCH = 2'd1,
-                     S_TX       = 2'd2;
-    reg [1:0] state;
+    // S_WAIT_GS: cmd_init / cmd_set_board の 1 cycle wait。
+    //   - DISPATCH で cmd_* を立てた cycle の翌 cycle で game_state の register が
+    //     更新される。さらに proto 側で読むには **もう 1 cycle 必要**
+    //     (proto.always と game_state.always が同じ posedge で並列動作するため、
+    //      proto の S_PLACE_MY は更新前の値を読んでしまう)
+    // S_PLACE_MY: 自分の駒を 1 個盤面に追加し phase WAIT_OPP へ。
+    //   - この cycle 入り口で gs_black/white は最新で legal_bb / pick_lsb も valid
+    localparam [2:0] S_RECV     = 3'd0,
+                     S_DISPATCH = 3'd1,
+                     S_TX       = 3'd2,
+                     S_WAIT_GS  = 3'd3,
+                     S_PLACE_MY = 3'd4;
+    reg [2:0] state;
+
+    // game_state の phase 定義 (game_state.v と同じ)。
+    // PHASE_IDLE / PHASE_MY_TURN は 5d-4 (EB/EW/ED ハンドラ) で使う。
+    /* verilator lint_off UNUSEDPARAM */
+    localparam [1:0] PHASE_IDLE     = 2'd0;
+    localparam [1:0] PHASE_MY_TURN  = 2'd1;
+    /* verilator lint_on UNUSEDPARAM */
+    localparam [1:0] PHASE_WAIT_OPP = 2'd2;
 
     // ----- 連結 ROM -----
     // PO\n  / VE01reversi-fw\n  / ER02 unknown\n
@@ -215,6 +232,36 @@ module proto (
                         end
                     end
                     buf_len <= 0;
+                    // 5d-3b: 自分の手番開始 (SB or 相手 MO 受信) なら 1 cycle 待って
+                    // game_state を確定させてから自分の手を選んで配置する。
+                    // それ以外 (SW/PI/VE/ER02) は S_TX。
+                    if (is_sb || (is_mo && cd_parse_valid)) begin
+                        state <= S_WAIT_GS;
+                    end else begin
+                        state <= S_TX;
+                    end
+                end
+                S_WAIT_GS: begin
+                    // 1 cycle wait. game_state.black/white は次 cycle 入り口で
+                    // 最新値となり、legal_bb / pick_lsb の組合せ出力も追従する。
+                    state <= S_PLACE_MY;
+                end
+                S_PLACE_MY: begin
+                    // 5d-3b: この cycle 入り口で game_state.black/white は最新。
+                    // legal_bb → pick_lsb (ps_one_hot) は新盤面で評価された値。
+                    if (ps_valid) begin
+                        gs_cmd_set_board <= 1'b1;
+                        if (gs_my_side == 1'b0) begin
+                            gs_in_black <= gs_black | ps_one_hot;
+                            gs_in_white <= gs_white;
+                        end else begin
+                            gs_in_white <= gs_white | ps_one_hot;
+                            gs_in_black <= gs_black;
+                        end
+                        gs_cmd_set_phase <= 1'b1;
+                        gs_in_phase <= PHASE_WAIT_OPP;
+                    end
+                    // 合法手なし (パス) のときは盤面/phase 不変のまま応答に進む
                     state <= S_TX;
                 end
                 S_TX: begin
