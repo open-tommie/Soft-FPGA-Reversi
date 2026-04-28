@@ -1,17 +1,17 @@
-# Verilator + cocotb で rtl/proto.v を直接ユニット検証する。
-# 直接 make するのではなく scripts/test-unit.sh から呼ばれる。
+# 各 RTL モジュールごとの cocotb サブディレクトリを順に回す top-level wrapper。
+# scripts/test-unit.sh から呼び出される。
 
-TOPLEVEL_LANG = verilog
-SIM ?= verilator
+SUBDIRS := proto legal_bb
 
-REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../..)
-RTL_DIR   := $(REPO_ROOT)/rtl
+.PHONY: all clean $(SUBDIRS)
 
-VERILOG_SOURCES := $(RTL_DIR)/proto.v
-TOPLEVEL := proto
-MODULE   := test_proto
+all: $(SUBDIRS)
 
-# Verilator 5.x で必要なオプション
-EXTRA_ARGS += --no-timing -Wno-fatal
+$(SUBDIRS):
+	@echo "============================================================"
+	@echo "  cocotb: $@"
+	@echo "============================================================"
+	$(MAKE) -C $@ $(MAKECMDGOALS)
 
-include $(shell cocotb-config --makefiles)/Makefile.sim
+clean:
+	for d in $(SUBDIRS); do $(MAKE) -C $$d clean; done
