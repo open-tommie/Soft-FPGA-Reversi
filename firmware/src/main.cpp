@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <memory>
 
 #include "pico/stdlib.h"
 
@@ -34,12 +33,14 @@ int main() {
 
     sleep_ms(2000);  // USB-CDC ホスト接続待ち
 
-    const std::unique_ptr<VerilatedContext> ctx{new VerilatedContext};
-    const std::unique_ptr<Vothello_top> dut{new Vothello_top{ctx.get(), "othello_top"}};
+    // ライフタイムは main 全体なので生 new で OK (unique_ptr は ~unique_ptr の
+    // インライン展開で std::default_delete 経路を引き連れて binary を太らせる)。
+    auto* const ctx = new VerilatedContext;
+    auto* const dut = new Vothello_top{ctx, "othello_top"};
 
     dut->rst = 1;
-    tick_dut(dut.get());
-    tick_dut(dut.get());
+    tick_dut(dut);
+    tick_dut(dut);
     dut->rst = 0;
 
     sfr::proto::Parser parser{emit_line};
@@ -53,7 +54,7 @@ int main() {
         }
 
         // DUT を 1 cycle 進める (旧スケッチの動作維持)
-        tick_dut(dut.get());
+        tick_dut(dut);
 
         led = !led;
         gpio_put(led_pin, led);
