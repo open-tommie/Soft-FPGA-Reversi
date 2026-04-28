@@ -33,6 +33,26 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     command: ["bash", "-lc", "scripts/_flash-inner.sh ${ELF:-firmware/build/firmware.elf}"]
 
+  test-hil:
+    <<: *base
+    user: "0"
+    # /dev をバインドする理由:
+    #   - openocd は /dev/bus/usb 経由で Probe (CMSIS-DAP) を叩く
+    #   - pyserial は /dev/ttyACM0 を開く。フラッシュ後の Pico 再列挙で
+    #     ttyACM の minor 番号が変わるため、static な devices: ではなく
+    #     /dev 全体をバインドして live に追従させる
+    privileged: true
+    volumes:
+      - ../:/work
+      - sfr-ccache:/ccache
+      - sfr-hil-venv:/opt/hil-venv
+      - /dev:/dev
+    environment:
+      - CCACHE_DIR=/ccache
+      - SFR_IN_CONTAINER=1
+      - PIP_CACHE_DIR=/ccache/pip
+    command: ["scripts/_test-hil-inner.sh"]
+
   test-unit:
     <<: *base
     # Verilator + cocotb のユニット検証。Pico SDK / USB は使わない。
@@ -50,4 +70,5 @@ services:
 
 volumes:
   sfr-ccache:
+  sfr-hil-venv:
   sfr-unit-venv:
