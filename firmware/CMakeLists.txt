@@ -27,21 +27,33 @@ set(RTL_DIR ${CMAKE_SOURCE_DIR}/../rtl)
 set(VERILATED_DIR ${CMAKE_BINARY_DIR}/verilated)
 set(VERILATOR_RUNTIME ${CMAKE_SOURCE_DIR}/src/verilator-runtime/verilated.cpp)
 
-# Verilator は configure 時に実行する。生成 .cpp 名にハッシュが入るため
-# (例: ___024root__DepSet_h<hash>__0.cpp)、列挙ではなく GLOB で拾う。
-# Verilog を編集した場合は build ディレクトリを消して再 cmake すること。
-file(MAKE_DIRECTORY ${VERILATED_DIR})
-execute_process(
+# verilator が --threads 無しで生成する .cpp ファイル群。--threads 1 を渡すと
+# ファイル名にハッシュ (___024root__DepSet_h<hash>__0.cpp) が入って enumerable
+# でなくなるので、threads は省略 (model のデフォルトは threads=1 と同等)。
+set(VERILATED_SOURCES
+    ${VERILATED_DIR}/Vothello_top.cpp
+    ${VERILATED_DIR}/Vothello_top__Syms__Slow.cpp
+    ${VERILATED_DIR}/Vothello_top___024root__0.cpp
+    ${VERILATED_DIR}/Vothello_top___024root__0__Slow.cpp
+    ${VERILATED_DIR}/Vothello_top___024root__Slow.cpp
+)
+
+# Verilog ファイルが変わったら自動で再 verilation。
+# stamp ファイルを OUTPUT にすることで、verilator 出力複数を 1 つの依存関係に集約。
+set(VERILATED_STAMP ${VERILATED_DIR}/.stamp)
+file(GLOB RTL_SOURCES CONFIGURE_DEPENDS "${RTL_DIR}/*.v" "${RTL_DIR}/*.sv")
+
+add_custom_command(
+    OUTPUT ${VERILATED_STAMP} ${VERILATED_SOURCES}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${VERILATED_DIR}
     COMMAND ${VERILATOR_BIN} --cc --no-trace --no-timing
-            --threads 1 --threads-dpi none
             --Mdir ${VERILATED_DIR}
             ${RTL_DIR}/othello_top.v
-    RESULT_VARIABLE _verilator_rc
+    COMMAND ${CMAKE_COMMAND} -E touch ${VERILATED_STAMP}
+    DEPENDS ${RTL_SOURCES}
+    COMMENT "Verilating othello_top (RTL changed)"
+    VERBATIM
 )
-if(NOT _verilator_rc EQUAL 0)
-    message(FATAL_ERROR "verilator failed (rc=${_verilator_rc})")
-endif()
-file(GLOB VERILATED_SOURCES CONFIGURE_DEPENDS "${VERILATED_DIR}/*.cpp")
 
 add_executable(firmware
     src/main.cpp
@@ -49,18 +61,22 @@ add_executable(firmware
     ${VERILATOR_RUNTIME}
 )
 
-target_include_directories(firmware PRIVATE
-    src
+target_include_directories(firmware PRIVATE src)
+# Verilator 由来のヘッダは 3rd-party 扱い (SYSTEM) にして警告対象から外す。
+# これで main.cpp 等が Vothello_top.h 経由で verilated_funcs.h を引いても
+# sign-compare 等の警告ノイズが出ない。
+target_include_directories(firmware SYSTEM PRIVATE
     ${VERILATED_DIR}
     ${VERILATOR_INC}
     ${VERILATOR_INC}/vltstd
 )
 
-# Verilator 由来のソースには stub_mutex.h を強制 include して
-# std::mutex などのスタブを差し込む。
+# Verilator 由来のソースには:
+# - -include stub_mutex.h で std::mutex など組込み向け stub を差し込む
+# - -w で 3rd-party 生成コードの警告 (sign-compare 等) を抑止
 set_source_files_properties(
     ${VERILATED_SOURCES} ${VERILATOR_RUNTIME}
-    PROPERTIES COMPILE_FLAGS "-include ${CMAKE_SOURCE_DIR}/src/stub_mutex.h"
+    PROPERTIES COMPILE_FLAGS "-include ${CMAKE_SOURCE_DIR}/src/stub_mutex.h -w"
 )
 
 target_compile_options(firmware PRIVATE
