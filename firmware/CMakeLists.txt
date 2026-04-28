@@ -15,14 +15,17 @@ pico_sdk_init()
 
 # --- Verilator codegen ---
 # rtl/othello_top.v を verilator で C++ 化し firmware にリンクする。
-# verilated.cpp は Pico 用にパッチした Soft-FPGA-TD4 のものを利用、
-# stub_mutex.h で std::mutex / clock_gettime / VlThreadPool / _DEBUG を no-op にする。
+# Verilator ランタイム (verilated.cpp) は上流 install を組込み向けに最小パッチ
+# したコピーを使う (firmware/src/verilator-runtime/verilated.cpp)。
+# パッチ内容はファイル冒頭参照。
+# 組込みでホスト前提機能 (mutex / threads / trace) は stub_mutex.h が
+# include guard 先取りと最小型 stub で迂回する。
 
 set(VERILATOR_BIN /usr/local/bin/verilator)
 set(VERILATOR_INC /usr/local/share/verilator/include)
 set(RTL_DIR ${CMAKE_SOURCE_DIR}/../rtl)
 set(VERILATED_DIR ${CMAKE_BINARY_DIR}/verilated)
-set(VERILATOR_RUNTIME ${CMAKE_SOURCE_DIR}/src/verilib/verilated.cpp)
+set(VERILATOR_RUNTIME ${CMAKE_SOURCE_DIR}/src/verilator-runtime/verilated.cpp)
 
 # Verilator は configure 時に実行する。生成 .cpp 名にハッシュが入るため
 # (例: ___024root__DepSet_h<hash>__0.cpp)、列挙ではなく GLOB で拾う。
