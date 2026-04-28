@@ -86,7 +86,13 @@ target_compile_options(firmware PRIVATE
     -Wall
     -Wextra
 )
-target_compile_definitions(firmware PRIVATE NDEBUG)
+target_compile_definitions(firmware PRIVATE
+    NDEBUG
+    # 当方は %lu / %s / %d しか使わないので float / 指数は要らない。
+    # _etoa / _ftoa / _strtod_l / _dtoa_r 等の引きずりを防ぐ (~3-5 KiB)。
+    PICO_PRINTF_SUPPORT_FLOAT=0
+    PICO_PRINTF_SUPPORT_EXPONENTIAL=0
+)
 
 target_link_libraries(firmware
     pico_stdlib
