@@ -5,9 +5,16 @@
 
 #include "stub_mutex.h"
 #include "Vothello_top.h"
+#include "proto.h"
 
 namespace {
-constexpr uint32_t kBlinkIntervalMs = 500;
+
+void emit_line(const char* line, std::size_t len) {
+    // stdio_usb / stdio_uart どちらにも出る。CR は付けない (LF のみ)。
+    fwrite(line, 1, len, stdout);
+    fputc('\n', stdout);
+    fflush(stdout);
+}
 
 void tick_dut(Vothello_top* dut) {
     dut->clk = 0;
@@ -15,6 +22,7 @@ void tick_dut(Vothello_top* dut) {
     dut->clk = 1;
     dut->eval();
 }
+
 }  // namespace
 
 int main() {
@@ -34,14 +42,21 @@ int main() {
     tick_dut(dut.get());
     dut->rst = 0;
 
-    uint32_t loop = 0;
+    sfr::proto::Parser parser{emit_line};
+
+    bool led = false;
     while (true) {
-        gpio_put(led_pin, loop & 1);
+        // 受信: 非ブロッキングで取れるだけ取る
+        int c;
+        while ((c = getchar_timeout_us(0)) >= 0) {
+            parser.feed_byte(static_cast<uint8_t>(c));
+        }
+
+        // DUT を 1 cycle 進める (旧スケッチの動作維持)
         tick_dut(dut.get());
-        printf("hello pico2 loop=%lu dut.tick=%lu\n",
-               static_cast<unsigned long>(loop),
-               static_cast<unsigned long>(dut->tick));
-        ++loop;
-        sleep_ms(kBlinkIntervalMs);
+
+        led = !led;
+        gpio_put(led_pin, led);
+        sleep_ms(50);
     }
 }

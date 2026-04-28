@@ -57,6 +57,7 @@ add_custom_command(
 
 add_executable(firmware
     src/main.cpp
+    src/proto.cpp
     ${VERILATED_SOURCES}
     ${VERILATOR_RUNTIME}
 )
