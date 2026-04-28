@@ -10,10 +10,11 @@ obj_dir/
 *.hex
 *.dis
 
-# Verilator
+# Verilator / cocotb
 *.vcd
 *.fst
 sim_build/
+results.xml
 
 # Python
 __pycache__/
