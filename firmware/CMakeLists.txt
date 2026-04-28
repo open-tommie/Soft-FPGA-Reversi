@@ -47,6 +47,7 @@ add_custom_command(
     OUTPUT ${VERILATED_STAMP} ${VERILATED_SOURCES}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${VERILATED_DIR}
     COMMAND ${VERILATOR_BIN} --cc --no-trace --no-timing
+            -y ${RTL_DIR}
             --Mdir ${VERILATED_DIR}
             ${RTL_DIR}/othello_top.v
     COMMAND ${CMAKE_COMMAND} -E touch ${VERILATED_STAMP}
@@ -57,7 +58,6 @@ add_custom_command(
 
 add_executable(firmware
     src/main.cpp
-    src/proto.cpp
     src/cxx_minimal.cpp
     ${VERILATED_SOURCES}
     ${VERILATOR_RUNTIME}
