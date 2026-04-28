@@ -30,7 +30,7 @@ TD16（自作 CPU）に Othello アクセラレータをぶら下げる構成に
 Verilog は Othello の純粋な計算 IP（合法手 bitmap, 反転計算, 評価, 適用）に限定する。
 プロトコル・FSM・I/O は **Pico SDK 上の C++ 側** に置く。
 
-```
+```text
 USB-CDC ─┐
          │  C++ (Pico SDK)
 UART  ───┤    ├─ プロトコルパーサ (PI/VE/SB/SW/MO/PA/BO/EB/EW/ED)
@@ -71,3 +71,17 @@ UART のビット同期は Verilog に書かない。バイトが揃った瞬間
 5. C++ から MMIO 経由で legal_bb を呼んで PICK_FIRST 結果を MO 送信、シナリオ回帰へ
 6. APPLY コマンド追加 → 全シナリオ PASS が新 MVP の完了条件
 7. 強化 AI（αβ, 評価関数）は別ブランチで
+
+## 実装中の方針変更 (2026-04-28 セッション後追記)
+
+Step 3 完了後、「**Verilog で書いて Pico 2 上で動く**」面白さを最大化するため、
+方針 A を修正して **proto FSM も Verilog 化**、間に挟む予定だった MMIO レジスタ層は撤去した。
+詳細は [`../doc/05-進捗メモ.md`](../doc/05-進捗メモ.md) の「当初設計からの変更」節と
+[`architecture.md`](architecture.md) の「責務分離」節。
+
+結果、Step 5 以降の実装は CLAUDE.md 上の手順表とは差分があるが、MVP 完了条件
+「APPLY → 全シナリオ PASS」の core game flow 部分は Step 6 で達成済み (シナリオ
+回帰の自動実行は残タスク)。
+
+C++ ホスト側はバイト中継 ~50 行だけになり、責務分離は B (バイト粒度) を更に推し進めた形。
+方針 C/D/E (golden 一致 / シナリオ回帰 / Verilator 同居) は維持。
