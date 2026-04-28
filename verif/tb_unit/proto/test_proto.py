@@ -103,3 +103,64 @@ async def repeated_pi(dut) -> None:
         await send_line(dut, b"PI\n")
         resp = await collect_response(dut)
         assert resp == b"PO\n", f"PO 期待 / 実際 {resp!r}"
+
+
+# ===== Step 5d-2: SB/SW で内部 game_state が初期化される =====
+# 応答は依然 ER02 のままだが、game_state が SB/SW を受けて状態遷移する
+# ことを階層アクセス (dut.u_game_state.*) で確認する。
+
+PHASE_IDLE = 0
+PHASE_MY_TURN = 1
+PHASE_WAIT_OPP = 2
+INIT_BLACK = (1 << 28) | (1 << 35)  # e4, d5
+INIT_WHITE = (1 << 27) | (1 << 36)  # d4, e5
+
+
+@cocotb.test()
+async def sb_initializes_black_my_turn(dut) -> None:
+    """SB を受けると game_state が my_side=Black, phase=MY_TURN, 初期盤面。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)  # ER02 応答を消費 (現状の挙動)
+
+    assert int(dut.u_game_state.my_side.value) == 0, "SB → Black"
+    assert int(dut.u_game_state.phase.value) == PHASE_MY_TURN
+    assert int(dut.u_game_state.black.value) == INIT_BLACK
+    assert int(dut.u_game_state.white.value) == INIT_WHITE
+
+
+@cocotb.test()
+async def sw_initializes_white_wait_opp(dut) -> None:
+    """SW を受けると my_side=White, phase=WAIT_OPP, 初期盤面。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SW\n")
+    await collect_response(dut)
+
+    assert int(dut.u_game_state.my_side.value) == 1, "SW → White"
+    assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
+    assert int(dut.u_game_state.black.value) == INIT_BLACK
+    assert int(dut.u_game_state.white.value) == INIT_WHITE
+
+
+@cocotb.test()
+async def pi_does_not_touch_game_state(dut) -> None:
+    """SB で初期化後、PI を投げても game_state は不変。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)
+    phase_before = int(dut.u_game_state.phase.value)
+    side_before = int(dut.u_game_state.my_side.value)
+    black_before = int(dut.u_game_state.black.value)
+    white_before = int(dut.u_game_state.white.value)
+
+    await send_line(dut, b"PI\n")
+    resp = await collect_response(dut)
+    assert resp == b"PO\n"
+
+    assert int(dut.u_game_state.phase.value) == phase_before
+    assert int(dut.u_game_state.my_side.value) == side_before
+    assert int(dut.u_game_state.black.value) == black_before
+    assert int(dut.u_game_state.white.value) == white_before

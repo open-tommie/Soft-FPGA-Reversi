@@ -74,6 +74,8 @@ module proto (
     // ディスパッチ判定 (S_DISPATCH に居るときに評価される)
     wire is_pi = (buf_len == 8'd2) && (buf_mem[0] == "P") && (buf_mem[1] == "I");
     wire is_ve = (buf_len == 8'd2) && (buf_mem[0] == "V") && (buf_mem[1] == "E");
+    wire is_sb = (buf_len == 8'd2) && (buf_mem[0] == "S") && (buf_mem[1] == "B");
+    wire is_sw = (buf_len == 8'd2) && (buf_mem[0] == "S") && (buf_mem[1] == "W");
 
     // ----- Step 5d-1: 内部状態 + 計算モジュール群を instantiate -----
     // この段階ではまだ FSM から駆動しない (cmd_* は全部 0)。次段で結線。
@@ -183,6 +185,16 @@ module proto (
                     end else begin
                         tx_idx <= ROM_ER_OFF;
                         tx_end <= ROM_ER_OFF + ROM_ER_LEN;
+                    end
+                    // 5d-2: SB/SW を受けたら game_state を初期化する。
+                    // 応答自体はまだ ER02 のまま (5d-3 で BS / MO 等に置換予定)。
+                    // gs_cmd_init は 1 cycle のみ立てる (default 0 で次 cycle 戻る)
+                    if (is_sb) begin
+                        gs_cmd_init  <= 1'b1;
+                        gs_init_side <= 1'b0;   // Black
+                    end else if (is_sw) begin
+                        gs_cmd_init  <= 1'b1;
+                        gs_init_side <= 1'b1;   // White
                     end
                     buf_len <= 0;
                     state <= S_TX;
