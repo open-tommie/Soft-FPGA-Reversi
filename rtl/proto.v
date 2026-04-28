@@ -205,6 +205,28 @@ module proto (
         .out_col_char(cd_col_char), .out_row_char(cd_row_char)
     );
 
+    // ===== Step 6: flip_calc =====
+    // 着手で裏返る opp 駒の bitmap を計算する。
+    // 入力は state によって 2 通り:
+    //   S_PLACE_MY:  own=自分の色, opp=相手の色, move=ps_index   (自分の手)
+    //   S_DISPATCH:  own=相手の色, opp=自分の色, move=cd_parse_bit (相手の MO 受信時)
+    // それ以外の state では出力は読まないので入力の値は問わない (デフォルト
+    // で S_DISPATCH 系の配線にしておく)
+    wire        is_my_move_phase = (state == S_PLACE_MY);
+    wire        fc_in_my_side    = is_my_move_phase ? gs_my_side : ~gs_my_side;
+    wire [63:0] fc_in_own = (fc_in_my_side == 1'b0) ? gs_black : gs_white;
+    wire [63:0] fc_in_opp = (fc_in_my_side == 1'b0) ? gs_white : gs_black;
+    wire [5:0]  fc_in_move_idx = is_my_move_phase ? ps_index : cd_parse_bit;
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire [63:0] fc_flip;
+    /* verilator lint_on UNUSEDSIGNAL */
+    flip_calc u_flip_calc (
+        .own(fc_in_own),
+        .opp(fc_in_opp),
+        .move_idx(fc_in_move_idx),
+        .flip(fc_flip)
+    );
+
     always @(posedge clk) begin
         if (rst) begin
             buf_len  <= 0;
@@ -265,18 +287,21 @@ module proto (
                         gs_cmd_init  <= 1'b1;
                         gs_init_side <= 1'b1;   // White
                     end
-                    // 5d-3a: MO<xy> を受けたら相手の駒を盤面に追加する。
-                    //   - 反転 (flip_calc) は step 6 で実装。今は **置くだけ**
-                    //   - my_side=0 なら opp は White、my_side=1 なら Black
+                    // 5d-3a / Step 6: MO<xy> を受けたら相手の駒を盤面に置く。
+                    // Step 6: fc_flip で挟まれた自分の駒を相手色に反転する。
+                    //   - my_side=0 (Black): opp=White
+                    //       white += move + flip、black -= flip
+                    //   - my_side=1 (White): opp=Black
+                    //       black += move + flip、white -= flip
                     //   - 不正座標 (cd_parse_valid=0) の場合は何もしない
                     if (is_mo && cd_parse_valid) begin
                         gs_cmd_set_board <= 1'b1;
                         if (gs_my_side == 1'b0) begin
-                            gs_in_white <= gs_white | (64'd1 << cd_parse_bit);
-                            gs_in_black <= gs_black;
+                            gs_in_white <= gs_white | (64'd1 << cd_parse_bit) | fc_flip;
+                            gs_in_black <= gs_black & ~fc_flip;
                         end else begin
-                            gs_in_black <= gs_black | (64'd1 << cd_parse_bit);
-                            gs_in_white <= gs_white;
+                            gs_in_black <= gs_black | (64'd1 << cd_parse_bit) | fc_flip;
+                            gs_in_white <= gs_white & ~fc_flip;
                         end
                     end
                     buf_len <= 0;
@@ -297,14 +322,15 @@ module proto (
                 S_PLACE_MY: begin
                     // 5d-3b: この cycle 入り口で game_state.black/white は最新。
                     // legal_bb → pick_lsb (ps_one_hot) は新盤面で評価された値。
+                    // Step 6: 自分の手 + flip_calc の結果で相手駒を反転。
                     if (ps_valid) begin
                         gs_cmd_set_board <= 1'b1;
                         if (gs_my_side == 1'b0) begin
-                            gs_in_black <= gs_black | ps_one_hot;
-                            gs_in_white <= gs_white;
+                            gs_in_black <= gs_black | ps_one_hot | fc_flip;
+                            gs_in_white <= gs_white & ~fc_flip;
                         end else begin
-                            gs_in_white <= gs_white | ps_one_hot;
-                            gs_in_black <= gs_black;
+                            gs_in_white <= gs_white | ps_one_hot | fc_flip;
+                            gs_in_black <= gs_black & ~fc_flip;
                         end
                         gs_cmd_set_phase <= 1'b1;
                         gs_in_phase <= PHASE_WAIT_OPP;

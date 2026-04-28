@@ -118,20 +118,34 @@ INIT_WHITE = (1 << 27) | (1 << 36)  # d4, e5
 
 @cocotb.test()
 async def sb_initializes_black_then_picks_move(dut) -> None:
-    """SB を受けると my_side=Black、自分の最初の手 (d3) が打たれて phase=WAIT_OPP。
+    """SB → my_side=Black、自分の最初の手 (d3) が打たれて反転、phase=WAIT_OPP。
 
-    5d-2 で cmd_init による初期化、5d-3b で続けて S_PLACE_MY が走るため、
-    SB の後の game_state は「初期盤面 + 自分の d3」の状態。
+    Step 6 で flip_calc が結線済み:
+      - 黒が d3 に置く → 縦方向で d4 (白) が挟まって反転 → 黒
+      - 結果: black = INIT_BLACK | d3 | d4, white = INIT_WHITE & ~d4
     """
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SB\n")
+    # SB 後は MO + BS の 2 行
+    await collect_response(dut)
     await collect_response(dut)
 
-    assert int(dut.u_game_state.my_side.value) == 0, "SB → Black"
+    bit_d3 = coord_to_bit("d3")
+    bit_d4 = coord_to_bit("d4")
+    expected_black = INIT_BLACK | (1 << bit_d3) | (1 << bit_d4)
+    expected_white = INIT_WHITE & ~(1 << bit_d4)
+
+    assert int(dut.u_game_state.my_side.value) == 0
     assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
-    assert int(dut.u_game_state.black.value) == INIT_BLACK | (1 << coord_to_bit("d3"))
-    assert int(dut.u_game_state.white.value) == INIT_WHITE
+    assert int(dut.u_game_state.black.value) == expected_black, (
+        f"black: got {int(dut.u_game_state.black.value):#018x}, "
+        f"expected {expected_black:#018x}"
+    )
+    assert int(dut.u_game_state.white.value) == expected_white, (
+        f"white: got {int(dut.u_game_state.white.value):#018x}, "
+        f"expected {expected_white:#018x}"
+    )
 
 
 @cocotb.test()
@@ -197,25 +211,30 @@ async def mo_adds_opp_white_after_sb(dut) -> None:
     await collect_response(dut)
     assert int(dut.u_game_state.my_side.value) == 0
 
-    # SB 直後の状態をスナップショット (5d-3b で d3 が打たれている)
+    # SB 直後の状態をスナップショット (5d-3b で d3 が打たれて d4 反転、Step 6)
     white_before = int(dut.u_game_state.white.value)
     black_before = int(dut.u_game_state.black.value)
 
     # MOf6 (相手 = White の手として f6 が来た想定)
+    # 反転チェック: f6 から見て北方向 (e5=白, ...) には対角ライン (NW: e5白→d4黒)
+    # SB 後の盤面で white は d4 反転済み = e5 のみ。f6 White を置いても反転は
+    # 個別に flip_calc が決める。ここでは「white に f6 が追加され、black の数が
+    # 減る (反転で黒→白) または不変」のいずれかを許容する。
     await send_line(dut, b"MOf6\n")
-    # MO 後も MO + BS の 2 行
     await collect_response(dut)
     await collect_response(dut)
 
-    # White に f6 が追加されるはず。同時に S_PLACE_MY で自分 (Black) の
-    # 次の手も打たれる可能性があるので、white の差分のみ厳密に検査する。
     bit_f6 = coord_to_bit("f6")
     new_white = int(dut.u_game_state.white.value)
+    new_black = int(dut.u_game_state.black.value)
+    # f6 自体は white に追加される
     assert new_white & (1 << bit_f6), (
         f"white should have bit_f6={bit_f6} set: got {new_white:#018x}"
     )
-    # white は基本的に増えるだけ (proto は反転なし)
-    assert (new_white & white_before) == white_before, "白の既存 bit が消えた"
+    # black + white の総数は (前の合計 + 1 = 相手の MO だけ) + my_move による +1 = 前 +2
+    # 反転は black ↔ white のやり取りなので合計は変わらない
+    assert bin(new_black).count("1") + bin(new_white).count("1") == \
+        bin(black_before).count("1") + bin(white_before).count("1") + 2
 
 
 @cocotb.test()
@@ -271,24 +290,19 @@ async def mo_invalid_coord_does_not_change_board(dut) -> None:
 
 
 @cocotb.test()
-async def sb_picks_own_first_move(dut) -> None:
-    """SB → 自分 (Black) の合法手から行優先で先頭 (d3) を選んで盤面に置く。
-
-    初期局面で黒の合法手は d3/c4/f5/e6 (= bits 19/26/37/44)。
-    pick_lsb で最下位 bit 19 (d3) が選ばれて black に追加される。
-    phase は WAIT_OPP に遷移。
-    """
+async def sb_picks_own_first_move_with_flip(dut) -> None:
+    """SB → 黒が d3 を選んで反転 (d4 が黒に)、phase=WAIT_OPP。"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SB\n")
     await collect_response(dut)
+    await collect_response(dut)
 
-    expected_black = INIT_BLACK | (1 << coord_to_bit("d3"))
-    expected_white = INIT_WHITE
-    assert int(dut.u_game_state.black.value) == expected_black, (
-        f"black after SB: got {int(dut.u_game_state.black.value):#018x}, "
-        f"expected {expected_black:#018x}"
-    )
+    bit_d3 = coord_to_bit("d3")
+    bit_d4 = coord_to_bit("d4")
+    expected_black = INIT_BLACK | (1 << bit_d3) | (1 << bit_d4)
+    expected_white = INIT_WHITE & ~(1 << bit_d4)
+    assert int(dut.u_game_state.black.value) == expected_black
     assert int(dut.u_game_state.white.value) == expected_white
     assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
 
@@ -430,6 +444,95 @@ async def mo_responds_with_mo_then_bs(dut) -> None:
     expected = board_to_bs(int(dut.u_game_state.black.value),
                            int(dut.u_game_state.white.value))
     assert dut_board == expected
+
+
+# ===== Step 6: 反転 (flip_calc) 込みで golden apply_move と完全一致 =====
+
+
+# Path 設定 (golden を import するため)
+import sys as _sys  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+from golden.reversi_rules import (  # noqa: E402
+    apply_move as _apply_move,
+    fmt_coord as _fmt_coord,
+    init_board as _init_board,
+    legal_moves as _legal_moves,
+    BLACK as _BLACK,
+    WHITE as _WHITE,
+)
+
+
+def _board_to_bb(board, target):
+    bits = 0
+    for r in range(8):
+        for c in range(8):
+            if board[r][c] == target:
+                bits |= 1 << (r * 8 + c)
+    return bits
+
+
+@cocotb.test()
+async def step6_self_play_matches_golden(dut) -> None:
+    """SB → 5 手連続 MO で proto の内部盤面が golden と完全一致。
+
+    proto の手選択は pick_lsb (= legal_moves[0])、相手の手も同じく lowest
+    を選んで MO で渡す。golden 側で apply_move を流して期待盤面を生成、
+    proto.u_game_state.black/white と bit-exact 比較。
+    """
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+
+    # SB: I'm Black, my first move
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)
+    await collect_response(dut)
+
+    # golden で初手 (黒) を打つ
+    board = _init_board()
+    my_legal = _legal_moves(board, _BLACK)
+    assert my_legal[0] == (2, 3)  # d3
+    _apply_move(board, my_legal[0][0], my_legal[0][1], _BLACK)
+
+    # 序盤数手 (PASS が発生しない範囲で) を golden と完全一致確認
+    for ply in range(5):
+        opp_legal = _legal_moves(board, _WHITE)
+        assert opp_legal, f"ply {ply}: 白の合法手が無くなった、test スコープ外"
+        opp_move = opp_legal[0]
+        opp_coord = _fmt_coord(*opp_move).encode()
+
+        # 送信前に my の合法手有無を予測 (proto が MO+BS を返すか ER02 だけか)
+        next_board = [row[:] for row in board]
+        _apply_move(next_board, opp_move[0], opp_move[1], _WHITE)
+        my_legal_after = _legal_moves(next_board, _BLACK)
+        assert my_legal_after, (
+            f"ply {ply}: 白の {opp_coord!r} 後に黒の合法手が無い、test スコープ外"
+        )
+
+        await send_line(dut, b"MO" + opp_coord + b"\n")
+        mo_line = await collect_response(dut)
+        bs_line = await collect_response(dut)
+        assert mo_line.startswith(b"MO")
+        assert bs_line.startswith(b"BS")
+
+        # golden 側でも opp と me を順に適用
+        _apply_move(board, opp_move[0], opp_move[1], _WHITE)
+        my_move = my_legal_after[0]
+        _apply_move(board, my_move[0], my_move[1], _BLACK)
+
+        # 完全一致確認
+        expected_black = _board_to_bb(board, _BLACK)
+        expected_white = _board_to_bb(board, _WHITE)
+        got_black = int(dut.u_game_state.black.value)
+        got_white = int(dut.u_game_state.white.value)
+        assert got_black == expected_black, (
+            f"ply {ply} after opp {opp_coord!r}:\n"
+            f"  black got={got_black:#018x} expected={expected_black:#018x}\n"
+            f"  diff      ={(got_black ^ expected_black):#018x}"
+        )
+        assert got_white == expected_white, (
+            f"ply {ply}: white got={got_white:#018x} expected={expected_white:#018x}"
+        )
 
 
 @cocotb.test()
