@@ -154,6 +154,8 @@ async def pi_does_not_touch_game_state(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SB\n")
+    # SB 後は MO + BS の 2 行
+    await collect_response(dut)
     await collect_response(dut)
     phase_before = int(dut.u_game_state.phase.value)
     side_before = int(dut.u_game_state.my_side.value)
@@ -190,6 +192,8 @@ async def mo_adds_opp_white_after_sb(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SB\n")
+    # SB 後は MO + BS の 2 行
+    await collect_response(dut)
     await collect_response(dut)
     assert int(dut.u_game_state.my_side.value) == 0
 
@@ -199,6 +203,8 @@ async def mo_adds_opp_white_after_sb(dut) -> None:
 
     # MOf6 (相手 = White の手として f6 が来た想定)
     await send_line(dut, b"MOf6\n")
+    # MO 後も MO + BS の 2 行
+    await collect_response(dut)
     await collect_response(dut)
 
     # White に f6 が追加されるはず。同時に S_PLACE_MY で自分 (Black) の
@@ -355,10 +361,92 @@ async def pi_still_returns_po_after_sb(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SB\n")
-    await collect_response(dut)  # MOd3
+    # 5d-3d で SB 後の応答は MO + BS の 2 行に増えた → 両方消費
+    await collect_response(dut)
+    await collect_response(dut)
     await send_line(dut, b"PI\n")
     resp = await collect_response(dut)
     assert resp == b"PO\n"
+
+
+# ===== Step 5d-3d: SB / MO 後に "MO<xy>\n" + "BS<board>\n" を連結送信 =====
+
+
+def board_to_bs(black_bb: int, white_bb: int) -> bytes:
+    """black/white bitboard → BS 用 64 文字 (a1..h8 行優先、0=空 1=黒 2=白)。"""
+    out = bytearray()
+    for i in range(64):
+        if (white_bb >> i) & 1:
+            out.append(ord("2"))
+        elif (black_bb >> i) & 1:
+            out.append(ord("1"))
+        else:
+            out.append(ord("0"))
+    return bytes(out)
+
+
+@cocotb.test()
+async def sb_responds_with_mo_then_bs(dut) -> None:
+    """SB → "MOd3\\n" + "BS<board>\\n" の 2 行が連続して返る。
+
+    BS の 64 文字は SB+自分の手反映後の盤面 (反転なし、d3 黒追加) と一致する。
+    """
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    mo_line = await collect_response(dut)
+    bs_line = await collect_response(dut)
+    assert mo_line == b"MOd3\n"
+    assert bs_line.startswith(b"BS"), f"BS で始まる: {bs_line!r}"
+    assert bs_line.endswith(b"\n")
+    assert len(bs_line) == 67, f"67 byte: {len(bs_line)}"
+
+    # 盤面 (BS の 64 文字部分) が DUT 内部状態と一致
+    dut_board = bs_line[2:-1]
+    expected = board_to_bs(int(dut.u_game_state.black.value),
+                           int(dut.u_game_state.white.value))
+    assert dut_board == expected, (
+        f"BS board mismatch:\n  DUT     : {dut_board!r}\n"
+        f"  expected: {expected!r}"
+    )
+
+
+@cocotb.test()
+async def mo_responds_with_mo_then_bs(dut) -> None:
+    """SW → MO<xy> → "MO<my_xy>\\n" + "BS<board>\\n" 2 行。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SW\n")
+    await collect_response(dut)   # SW は ER02 のみ (BS は付かない)
+
+    await send_line(dut, b"MOd3\n")
+    mo_line = await collect_response(dut)
+    bs_line = await collect_response(dut)
+    assert mo_line.startswith(b"MO")
+    assert bs_line.startswith(b"BS") and len(bs_line) == 67
+
+    # BS の盤面が現在の game_state と一致
+    dut_board = bs_line[2:-1]
+    expected = board_to_bs(int(dut.u_game_state.black.value),
+                           int(dut.u_game_state.white.value))
+    assert dut_board == expected
+
+
+@cocotb.test()
+async def sw_no_bs_appended(dut) -> None:
+    """SW 直後の応答は ER02 のみで BS が続かない (5d-3d の chain は MO に限る)。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SW\n")
+    line1 = await collect_response(dut)
+    assert line1.startswith(b"ER02")
+
+    # 続けて何も来ないことを確認 (PI を投げて PO がそのまま返るか)
+    await send_line(dut, b"PI\n")
+    line2 = await collect_response(dut)
+    assert line2 == b"PO\n", (
+        f"SW の後ろに余計な BS があると PO が遅れて見える。実際: {line2!r}"
+    )
 
 
 @cocotb.test()

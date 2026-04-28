@@ -85,15 +85,45 @@ module proto (
         endcase
     endfunction
 
-    reg [5:0] tx_idx;     // 現在送信 index (mode によって意味が変わる)
-    reg [5:0] tx_end;     // 終了 index (exclusive)
+    // 5d-3d: BS<64char>\n の i 番目バイト
+    //   i = 0       → 'B'
+    //   i = 1       → 'S'
+    //   i = 2..65   → cell[i-2] : '0' empty / '1' black / '2' white
+    //                 (etc/protocol.md §7 行優先 a1, b1, ..., h1, a2, b2, ..., h8)
+    //                 bit_index = (i-2) で gs_black/white を引く
+    //   i = 66      → '\n'
+    function automatic [7:0] bs_byte(
+        input [6:0]  i,
+        input [63:0] black,
+        input [63:0] white
+    );
+        reg [5:0] cell_idx;
+    begin
+        cell_idx = i[5:0] - 6'd2;
+        if      (i == 7'd0)  bs_byte = "B";
+        else if (i == 7'd1)  bs_byte = "S";
+        else if (i == 7'd66) bs_byte = 8'h0A;
+        else if (white[cell_idx]) bs_byte = "2";
+        else if (black[cell_idx]) bs_byte = "1";
+        else                       bs_byte = "0";
+    end
+    endfunction
 
-    // 5d-3c: TX バイト供給モード
-    //   TX_MODE_ROM ROM (PI/VE/ER02 等の固定文字列) を tx_idx で読み出す
+    // BS<64char>\n は最大 67 byte なので tx_idx は 7-bit 必要 (5d-3d)
+    reg [6:0] tx_idx;     // 現在送信 index (mode によって意味が変わる)
+    reg [6:0] tx_end;     // 終了 index (exclusive)
+
+    // 5d-3c/d: TX バイト供給モード
+    //   TX_MODE_ROM PI/VE/ER02 等の固定文字列を resp_rom() で読み出す
     //   TX_MODE_MO  "MO<xy>\n" 5 byte を動的生成 (xy は coord.format 出力)
-    localparam [0:0] TX_MODE_ROM = 1'd0;
-    localparam [0:0] TX_MODE_MO  = 1'd1;
-    reg tx_mode;
+    //   TX_MODE_BS  "BS<64char>\n" 67 byte を動的生成 (cell は gs_black/white)
+    localparam [1:0] TX_MODE_ROM = 2'd0;
+    localparam [1:0] TX_MODE_MO  = 2'd1;
+    localparam [1:0] TX_MODE_BS  = 2'd2;
+    reg [1:0] tx_mode;
+
+    // 5d-3d: MO 送信が終わったら BS<board> を続ける
+    reg tx_pending_bs;
 
     // S_PLACE_MY で打った手の bit_index。coord.format の入力に使う
     // (legal_bb 出力は次 cycle で別の手を指す可能性があるので、捕捉が必要)
@@ -184,6 +214,7 @@ module proto (
             tx_idx   <= 0;
             tx_end   <= 0;
             tx_mode  <= TX_MODE_ROM;
+            tx_pending_bs <= 1'b0;
             my_move_bit <= 6'd0;
             // 5d-1: game_state コマンドはまだ FSM から駆動しない
             gs_cmd_init      <= 0;
@@ -215,14 +246,14 @@ module proto (
                     // 5d-3c: TX モードと index/end をセット (デフォルトは ROM 経路)
                     tx_mode <= TX_MODE_ROM;
                     if (is_pi) begin
-                        tx_idx <= ROM_PO_OFF;
-                        tx_end <= ROM_PO_OFF + ROM_PO_LEN;
+                        tx_idx <= {1'b0, ROM_PO_OFF};
+                        tx_end <= {1'b0, ROM_PO_OFF + ROM_PO_LEN};
                     end else if (is_ve) begin
-                        tx_idx <= ROM_VE_OFF;
-                        tx_end <= ROM_VE_OFF + ROM_VE_LEN;
+                        tx_idx <= {1'b0, ROM_VE_OFF};
+                        tx_end <= {1'b0, ROM_VE_OFF + ROM_VE_LEN};
                     end else begin
-                        tx_idx <= ROM_ER_OFF;
-                        tx_end <= ROM_ER_OFF + ROM_ER_LEN;
+                        tx_idx <= {1'b0, ROM_ER_OFF};
+                        tx_end <= {1'b0, ROM_ER_OFF + ROM_ER_LEN};
                     end
                     // 5d-2: SB/SW を受けたら game_state を初期化する。
                     // 応答自体はまだ ER02 のまま (5d-3 で BS / MO 等に置換予定)。
@@ -280,8 +311,10 @@ module proto (
                         // 5d-3c: 自分の手の bit_index を捕捉 + TX を MO モードに
                         my_move_bit <= ps_index;
                         tx_mode <= TX_MODE_MO;
-                        tx_idx  <= 6'd0;
-                        tx_end  <= 6'd5;            // "MO<x><y>\n" = 5 byte
+                        tx_idx  <= 7'd0;
+                        tx_end  <= 7'd5;            // "MO<x><y>\n" = 5 byte
+                        // 5d-3d: MO の後に BS<board>\n を続けて送る
+                        tx_pending_bs <= 1'b1;
                     end
                     // ps_valid=0 (合法手なし、パス相当) のときは tx_mode は
                     // S_DISPATCH で設定された ER02 のまま (TX_MODE_ROM)
@@ -289,24 +322,37 @@ module proto (
                 end
                 S_TX: begin
                     if (tx_idx < tx_end) begin
-                        // 5d-3c: tx_mode で source を切替
-                        if (tx_mode == TX_MODE_ROM) begin
-                            tx_byte <= resp_rom(tx_idx);
-                        end else begin
-                            // TX_MODE_MO: "M", "O", col, row, "\n"
-                            case (tx_idx[2:0])
-                                3'd0: tx_byte <= "M";
-                                3'd1: tx_byte <= "O";
-                                3'd2: tx_byte <= cd_col_char;
-                                3'd3: tx_byte <= cd_row_char;
-                                3'd4: tx_byte <= 8'h0A;
-                                default: tx_byte <= 8'h00;
-                            endcase
-                        end
+                        // 5d-3c/d: tx_mode で source を切替
+                        case (tx_mode)
+                            TX_MODE_ROM: tx_byte <= resp_rom(tx_idx[5:0]);
+                            TX_MODE_MO: begin
+                                // "M", "O", col, row, "\n"
+                                case (tx_idx[2:0])
+                                    3'd0: tx_byte <= "M";
+                                    3'd1: tx_byte <= "O";
+                                    3'd2: tx_byte <= cd_col_char;
+                                    3'd3: tx_byte <= cd_row_char;
+                                    3'd4: tx_byte <= 8'h0A;
+                                    default: tx_byte <= 8'h00;
+                                endcase
+                            end
+                            TX_MODE_BS:
+                                tx_byte <= bs_byte(tx_idx, gs_black, gs_white);
+                            default: tx_byte <= 8'h00;
+                        endcase
                         tx_valid <= 1'b1;
                         tx_idx   <= tx_idx + 1'b1;
                     end else begin
-                        state <= S_RECV;
+                        // 5d-3d: MO 送出が終わったら BS をチェイン送信
+                        if (tx_pending_bs) begin
+                            tx_pending_bs <= 1'b0;
+                            tx_mode <= TX_MODE_BS;
+                            tx_idx  <= 7'd0;
+                            tx_end  <= 7'd67;   // "BS" + 64 cell + "\n"
+                            // state は S_TX のまま継続
+                        end else begin
+                            state <= S_RECV;
+                        end
                     end
                 end
                 default: state <= S_RECV;
