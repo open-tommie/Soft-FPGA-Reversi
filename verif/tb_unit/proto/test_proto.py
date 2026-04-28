@@ -301,6 +301,66 @@ async def sw_does_not_pick_own_move(dut) -> None:
     assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
 
 
+# ===== Step 5d-3c: SB / MO 後の応答が "MO<xy>\n" になる =====
+
+
+def bit_to_coord(bit: int) -> str:
+    col = bit & 0x7
+    row = (bit >> 3) & 0x7
+    return f"{chr(ord('a') + col)}{chr(ord('1') + row)}"
+
+
+@cocotb.test()
+async def sb_responds_with_mo(dut) -> None:
+    """SB → "MOd3\\n" が返る (黒の最下位合法手 d3 を打って通知)。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    resp = await collect_response(dut)
+    assert resp == b"MOd3\n", f"期待 MOd3 / 実際 {resp!r}"
+
+
+@cocotb.test()
+async def mo_responds_with_mo(dut) -> None:
+    """SW → MOd3 (相手 Black) → 自分 (White) の手を MO で返す。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SW\n")
+    resp_sw = await collect_response(dut)
+    # SW 自身は (現状) ER02 応答だが、内部状態は my=White で確定
+    assert resp_sw.startswith(b"ER02") or resp_sw == b"\n"
+
+    await send_line(dut, b"MOd3\n")
+    resp = await collect_response(dut)
+    # 白の応答も "MO<xy>\n" 形式
+    assert resp.startswith(b"MO"), f"MO で始まる応答を期待: {resp!r}"
+    assert resp.endswith(b"\n")
+    assert len(resp) == 5, f"MO<xy>\\n は 5 byte: {resp!r}"
+
+    # 応答の <xy> は実際に white に追加された bit と一致する
+    new_white = int(dut.u_game_state.white.value)
+    new_bits = new_white & ~INIT_WHITE
+    # (反転なしの単純配置なので、追加された bit はちょうど 1 個)
+    assert bin(new_bits).count("1") == 1
+    added_bit = (new_bits & -new_bits).bit_length() - 1
+    expected_xy = bit_to_coord(added_bit).encode()
+    assert resp[2:4] == expected_xy, (
+        f"応答 xy={resp[2:4]!r} が white の追加 bit {added_bit} ({bit_to_coord(added_bit)}) と不一致"
+    )
+
+
+@cocotb.test()
+async def pi_still_returns_po_after_sb(dut) -> None:
+    """SB で MO 応答を出した後でも PI は PO を返す (TX モード切替が壊れてない)。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)  # MOd3
+    await send_line(dut, b"PI\n")
+    resp = await collect_response(dut)
+    assert resp == b"PO\n"
+
+
 @cocotb.test()
 async def mo_then_pick_own_move(dut) -> None:
     """SW → MO で相手の手を受けたら自分 (White) の手も自動で打つ。
