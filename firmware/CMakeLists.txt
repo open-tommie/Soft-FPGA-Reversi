@@ -58,9 +58,16 @@ add_custom_command(
 add_executable(firmware
     src/main.cpp
     src/proto.cpp
+    src/cxx_minimal.cpp
     ${VERILATED_SOURCES}
     ${VERILATOR_RUNTIME}
 )
+
+# 注: LTO (INTERPROCEDURAL_OPTIMIZATION) は Pico SDK の
+# `-Wl,--wrap=printf/puts/putchar` と衝突して link エラーになる
+# (LTO で printf 呼び出しがインライン化され --wrap が効かない)。
+# 採用しない。回避には全 printf 系 TU を -fno-lto にする必要があり
+# 得られる効果に対して保守コストが大きい。
 
 target_include_directories(firmware PRIVATE src)
 # Verilator 由来のヘッダは 3rd-party 扱い (SYSTEM) にして警告対象から外す。
