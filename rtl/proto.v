@@ -76,6 +76,8 @@ module proto (
     wire is_ve = (buf_len == 8'd2) && (buf_mem[0] == "V") && (buf_mem[1] == "E");
     wire is_sb = (buf_len == 8'd2) && (buf_mem[0] == "S") && (buf_mem[1] == "B");
     wire is_sw = (buf_len == 8'd2) && (buf_mem[0] == "S") && (buf_mem[1] == "W");
+    // MO<xy>: 4 byte (M, O, col_char, row_char)。座標妥当性は cd_parse_valid で別判定
+    wire is_mo = (buf_len == 8'd4) && (buf_mem[0] == "M") && (buf_mem[1] == "O");
 
     // ----- Step 5d-1: 内部状態 + 計算モジュール群を instantiate -----
     // この段階ではまだ FSM から駆動しない (cmd_* は全部 0)。次段で結線。
@@ -134,8 +136,10 @@ module proto (
     wire [7:0] cd_col_char;
     wire [7:0] cd_row_char;
     /* verilator lint_on UNUSEDSIGNAL */
+    // parse 入力は MO<xy> の payload 部 (buf_mem[2..3]) を常時接続。
+    // 出力は S_DISPATCH で is_mo のときだけ意味を持つ。
     coord u_coord (
-        .in_col_char(8'h00), .in_row_char(8'h00),
+        .in_col_char(buf_mem[2]), .in_row_char(buf_mem[3]),
         .parse_bit(cd_parse_bit), .parse_valid(cd_parse_valid),
         .in_bit_index(ps_index),
         .out_col_char(cd_col_char), .out_row_char(cd_row_char)
@@ -195,6 +199,20 @@ module proto (
                     end else if (is_sw) begin
                         gs_cmd_init  <= 1'b1;
                         gs_init_side <= 1'b1;   // White
+                    end
+                    // 5d-3a: MO<xy> を受けたら相手の駒を盤面に追加する。
+                    //   - 反転 (flip_calc) は step 6 で実装。今は **置くだけ**
+                    //   - my_side=0 なら opp は White、my_side=1 なら Black
+                    //   - 不正座標 (cd_parse_valid=0) の場合は何もしない
+                    if (is_mo && cd_parse_valid) begin
+                        gs_cmd_set_board <= 1'b1;
+                        if (gs_my_side == 1'b0) begin
+                            gs_in_white <= gs_white | (64'd1 << cd_parse_bit);
+                            gs_in_black <= gs_black;
+                        end else begin
+                            gs_in_black <= gs_black | (64'd1 << cd_parse_bit);
+                            gs_in_white <= gs_white;
+                        end
                     end
                     buf_len <= 0;
                     state <= S_TX;

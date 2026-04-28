@@ -164,3 +164,83 @@ async def pi_does_not_touch_game_state(dut) -> None:
     assert int(dut.u_game_state.my_side.value) == side_before
     assert int(dut.u_game_state.black.value) == black_before
     assert int(dut.u_game_state.white.value) == white_before
+
+
+# ===== Step 5d-3a: MO<xy> で相手の駒が盤面に追加される (反転なし) =====
+
+
+def coord_to_bit(coord: str) -> int:
+    """'d3' → bit_index (= 19)。"""
+    col = ord(coord[0]) - ord("a")
+    row = ord(coord[1]) - ord("1")
+    return row * 8 + col
+
+
+@cocotb.test()
+async def mo_adds_opp_white_after_sb(dut) -> None:
+    """SB (my=Black) → MO<xy> で相手 (White) の駒が盤面に追加される。
+
+    e.g. 黒の合法手 d3/c4/f5/e6 のひとつとして d3 を黒が指したら、
+    通常の対戦では白が次に手を指すが、ここでは proto レベルで
+    「MO 受信 = 相手の手の通知」として動作確認する。
+    """
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)
+
+    # 初期状態 (my_side=0=Black) を確認
+    assert int(dut.u_game_state.my_side.value) == 0
+    white_before = int(dut.u_game_state.white.value)
+    black_before = int(dut.u_game_state.black.value)
+    assert white_before == INIT_WHITE
+    assert black_before == INIT_BLACK
+
+    # MOd3 (相手 = White の手として d3 が来た想定。実際の合法性は問わず単に置く)
+    await send_line(dut, b"MOd3\n")
+    await collect_response(dut)  # ER02 応答 (5d-3a の段階では未変更)
+
+    # White に d3 (bit 19) が追加される、Black は不変
+    bit_d3 = coord_to_bit("d3")
+    assert int(dut.u_game_state.white.value) == white_before | (1 << bit_d3), (
+        f"white after MOd3: got {int(dut.u_game_state.white.value):#018x}, "
+        f"expected {(white_before | (1 << bit_d3)):#018x}"
+    )
+    assert int(dut.u_game_state.black.value) == black_before
+
+
+@cocotb.test()
+async def mo_adds_opp_black_after_sw(dut) -> None:
+    """SW (my=White) → MO<xy> で相手 (Black) の駒が盤面に追加される。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SW\n")
+    await collect_response(dut)
+    assert int(dut.u_game_state.my_side.value) == 1
+    black_before = int(dut.u_game_state.black.value)
+    white_before = int(dut.u_game_state.white.value)
+
+    await send_line(dut, b"MOe6\n")
+    await collect_response(dut)
+
+    bit_e6 = coord_to_bit("e6")
+    assert int(dut.u_game_state.black.value) == black_before | (1 << bit_e6)
+    assert int(dut.u_game_state.white.value) == white_before
+
+
+@cocotb.test()
+async def mo_invalid_coord_does_not_change_board(dut) -> None:
+    """MO<XY> (大文字) は coord.parse_valid=0 で盤面に手を加えない。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)
+    black_before = int(dut.u_game_state.black.value)
+    white_before = int(dut.u_game_state.white.value)
+
+    # MOA1: 大文字 'A' は invalid なので何も起こらない
+    await send_line(dut, b"MOA1\n")
+    await collect_response(dut)
+
+    assert int(dut.u_game_state.black.value) == black_before
+    assert int(dut.u_game_state.white.value) == white_before
