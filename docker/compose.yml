@@ -26,6 +26,14 @@ services:
     <<: *base
     command: ["bash", "-lc", "scripts/_build-pico-inner.sh"]
 
+  build-host:
+    <<: *base
+    # Pico SDK 非依存のホスト版 (host/) ビルド & 実行用。
+    # stdin/stdout を流したいので tty 無効、stdin_open は有効。
+    stdin_open: true
+    entrypoint: ["scripts/_build-host-inner.sh"]
+    command: []
+
   flash:
     <<: *base
     user: "0"

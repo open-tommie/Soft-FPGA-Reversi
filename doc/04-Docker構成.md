@@ -36,6 +36,7 @@ USER_UID=$(id -u) USER_GID=$(id -g) \
 | --- | --- | --- | --- |
 | `dev` | non-root | なし | 対話シェル (`docker compose run dev`)。手動デバッグ用 |
 | `firmware` | non-root | なし | `_build-pico-inner.sh` で CMake + Ninja ビルド |
+| `build-host` | non-root | なし | `_build-host-inner.sh` で Pico SDK 非依存のホスト ELF をビルド (詳細: [06-ホストビルド](06-ホストビルド.md)) |
 | `flash` | root | `/dev/bus/usb` | `_flash-inner.sh` で openocd 経由フラッシュ |
 | `test-hil` | root, `privileged` | `/dev` 全体 | `_test-hil-inner.sh` で pytest 実行 + 内部で flash |
 
