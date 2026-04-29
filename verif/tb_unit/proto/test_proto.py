@@ -65,12 +65,12 @@ async def pi_returns_po(dut) -> None:
 
 @cocotb.test()
 async def ve_returns_version(dut) -> None:
-    """VE\\n → VE01reversi-fw\\n"""
+    """VE\\n → VE01SW-FPGA-reversi-01\\n"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"VE\n")
     resp = await collect_response(dut)
-    assert resp == b"VE01reversi-fw\n", f"期待 VE01reversi-fw / 実際 {resp!r}"
+    assert resp == b"VE01SW-FPGA-reversi-01\n", f"期待 VE01SW-FPGA-reversi-01 / 実際 {resp!r}"
 
 
 @cocotb.test()

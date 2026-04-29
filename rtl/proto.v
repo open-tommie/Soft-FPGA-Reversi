@@ -76,8 +76,8 @@ module proto (
     // LF (\n) は ROM が自動付加するため文字列には含めない。
     localparam        PO_STR       = "PO";
     localparam integer PO_STR_CHARS = 2;
-    localparam        VE_STR       = "VE01reversi-fw";
-    localparam integer VE_STR_CHARS = 14;
+    localparam        VE_STR       = "VE01SW-FPGA-reversi-01";
+    localparam integer VE_STR_CHARS = 22;
     localparam        ER_STR       = "ER02 unknown";
     localparam integer ER_STR_CHARS = 12;
 
