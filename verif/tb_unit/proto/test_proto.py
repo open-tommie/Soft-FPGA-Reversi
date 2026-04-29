@@ -65,12 +65,12 @@ async def pi_returns_po(dut) -> None:
 
 @cocotb.test()
 async def ve_returns_version(dut) -> None:
-    """VE\\n → VE01SW-FPGA-reversi-01\\n"""
+    """VE\\n → VE01SW-FPGA-pico2-reversi-01\\n"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"VE\n")
     resp = await collect_response(dut)
-    assert resp == b"VE01SW-FPGA-reversi-01\n", f"期待 VE01SW-FPGA-reversi-01 / 実際 {resp!r}"
+    assert resp == b"VE01SW-FPGA-pico2-reversi-01\n", f"期待 VE01SW-FPGA-pico2-reversi-01 / 実際 {resp!r}"
 
 
 @cocotb.test()
@@ -587,4 +587,75 @@ async def mo_then_pick_own_move(dut) -> None:
     assert bin(new_white).count("1") == bin(INIT_WHITE).count("1") + 1, (
         f"white should have +1 piece, got {bin(new_white).count('1')} pieces"
     )
+    assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
+
+
+# ===== Step 7: PA / EB / EW / ED ハンドラ =====
+
+
+@cocotb.test()
+async def pa_triggers_my_move(dut) -> None:
+    """PA (相手パス) を受けると firmware が自分の手を MO+BS で返す。
+
+    SB → 自分の初手を打って WAIT_OPP の後、PA が来た想定。
+    現在の盤面で黒の合法手があるので PA\n を送ると MO+BS が返り phase=WAIT_OPP。
+    """
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)  # MOd3
+    await collect_response(dut)  # BS
+
+    black_before = int(dut.u_game_state.black.value)
+
+    await send_line(dut, b"PA\n")
+    mo_line = await collect_response(dut)
+    bs_line = await collect_response(dut)
+
+    assert mo_line.startswith(b"MO"), f"PA 後に MO を期待: {mo_line!r}"
+    assert len(mo_line) == 5, f"MO<xy>\\n は 5 byte: {mo_line!r}"
+    assert bs_line.startswith(b"BS"), f"BS が続くこと: {bs_line!r}"
+    assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
+    assert bin(int(dut.u_game_state.black.value)).count("1") > bin(black_before).count("1"), \
+        "PA 後に黒の駒数が増えること"
+
+
+@cocotb.test()
+async def end_commands_reset_to_idle(dut) -> None:
+    """EB / EW / ED を受けると phase=IDLE に戻り、応答は返さない。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    for cmd in (b"EB\n", b"EW\n", b"ED\n"):
+        await reset(dut)
+        await send_line(dut, b"SB\n")
+        await collect_response(dut)
+        await collect_response(dut)
+        assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
+
+        await send_line(dut, cmd)
+        for _ in range(20):
+            await RisingEdge(dut.clk)
+            assert not dut.tx_valid.value, f"{cmd!r} 後に余計な TX が出た"
+
+        assert int(dut.u_game_state.phase.value) == PHASE_IDLE, \
+            f"{cmd!r} 後 IDLE を期待、got {int(dut.u_game_state.phase.value)}"
+
+
+@cocotb.test()
+async def end_then_sb_restarts_game(dut) -> None:
+    """EB で IDLE 復帰後、SB を送ると新たに対局が始まる (phase=WAIT_OPP)。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"SB\n")
+    await collect_response(dut)
+    await collect_response(dut)
+    await send_line(dut, b"EB\n")
+    for _ in range(20):
+        await RisingEdge(dut.clk)
+
+    # 再開
+    await send_line(dut, b"SB\n")
+    mo_line = await collect_response(dut)
+    await collect_response(dut)  # BS
+    assert mo_line == b"MOd3\n", f"再開後の初手: {mo_line!r}"
+    assert int(dut.u_game_state.black.value) != 0
     assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP

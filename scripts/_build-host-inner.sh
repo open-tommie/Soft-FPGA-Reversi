@@ -9,8 +9,8 @@ set -euo pipefail
 #   run --debug        → 起動時に主要レジスタを stderr に毎 cycle 表示 (FSM 非 RECV / RX / TX 時)
 #   それ以外           → cmake / ninja に素通し (例: "clean")
 
-cmake -S host -B host/build -G Ninja
-cmake --build host/build
+cmake -S host -B host/build -G Ninja   >&2
+cmake --build host/build               >&2
 
 # 先頭 "--" は docker compose 経由の常套句。あれば剥がす。
 if [[ "${1:-}" == "--" ]]; then

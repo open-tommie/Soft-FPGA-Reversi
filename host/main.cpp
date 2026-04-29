@@ -147,9 +147,16 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--debug") == 0) debug_mode = true;
     }
 
-    Verilated::commandArgs(argc, argv);
-
     auto* const ctx = new VerilatedContext;
+
+    // --debug のとき +debug plusarg を追加して Verilog 側の $display/$strobe を有効化
+    // ctx->commandArgs は dut 生成・eval() より前に呼ぶ必要がある
+    const char* vl_argv[33];
+    int vl_argc = 0;
+    for (int i = 0; i < argc && vl_argc < 32; ++i) vl_argv[vl_argc++] = argv[i];
+    if (debug_mode) vl_argv[vl_argc++] = "+debug";
+    ctx->commandArgs(vl_argc, const_cast<char**>(vl_argv));
+
     auto* const dut = new Vothello_top{ctx, "othello_top"};
     apply_reset(dut);
 

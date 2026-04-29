@@ -39,6 +39,10 @@ module proto (
     always @(posedge clk)
         if (rx_valid || tx_valid || state != S_RECV)
             dbg_cycle <= dbg_cycle + 1;
+    // --debug フラグ連動: host/main.cpp が +debug plusarg を渡したときだけ有効
+    // reg + initial で「シミュレーション開始時に 1 度だけ評価」にする
+    reg dbg_en;
+    initial dbg_en = $test$plusargs("debug");
     `endif
 
     // ----- 行 buffer -----
@@ -76,19 +80,23 @@ module proto (
     // LF (\n) は ROM が自動付加するため文字列には含めない。
     localparam        PO_STR       = "PO";
     localparam integer PO_STR_CHARS = 2;
-    localparam        VE_STR       = "VE01SW-FPGA-reversi-01";
-    localparam integer VE_STR_CHARS = 22;
+    localparam        VE_STR       = "VE01SW-FPGA-pico2-reversi-01";
+    localparam integer VE_STR_CHARS = 28;
     localparam        ER_STR       = "ER02 unknown";
     localparam integer ER_STR_CHARS = 12;
+    localparam        PA_STR       = "PA";
+    localparam integer PA_STR_CHARS = 2;
 
     localparam [5:0] ROM_PO_OFF = 6'd0;
     /* verilator lint_off WIDTHTRUNC */
     localparam [5:0] ROM_PO_LEN = PO_STR_CHARS + 1;   // +LF (integer→6bit は意図的)
     localparam [5:0] ROM_VE_LEN = VE_STR_CHARS + 1;
     localparam [5:0] ROM_ER_LEN = ER_STR_CHARS + 1;
+    localparam [5:0] ROM_PA_LEN = PA_STR_CHARS + 1;
     /* verilator lint_on WIDTHTRUNC */
     localparam [5:0] ROM_VE_OFF = ROM_PO_OFF + ROM_PO_LEN;
     localparam [5:0] ROM_ER_OFF = ROM_VE_OFF + ROM_VE_LEN;
+    localparam [5:0] ROM_PA_OFF = ROM_ER_OFF + ROM_ER_LEN;
 
     // resp_rom(i): ROM インデックス i に対応する応答バイトを返す。
     // 各文字列 localparam からバイト抽出して生成する (Verilog 文字列は MSB が先頭文字)。
@@ -107,10 +115,14 @@ module proto (
             off     = i - ROM_VE_OFF;
             bit_off = (VE_STR_CHARS - 1 - off) * 8;
             resp_rom = (i < ROM_ER_OFF - 6'd1) ? VE_STR[bit_off +: 8] : 8'h0A;
-        end else begin
+        end else if (i < ROM_PA_OFF) begin
             off     = i - ROM_ER_OFF;
             bit_off = (ER_STR_CHARS - 1 - off) * 8;
             resp_rom = (off < ROM_ER_LEN - 6'd1) ? ER_STR[bit_off +: 8] : 8'h0A;
+        end else begin
+            off     = i - ROM_PA_OFF;
+            bit_off = (PA_STR_CHARS - 1 - off) * 8;
+            resp_rom = (i < ROM_PA_OFF + PA_STR_CHARS) ? PA_STR[bit_off +: 8] : 8'h0A;
         end
     end
     endfunction
@@ -167,6 +179,10 @@ module proto (
     wire is_sw = (buf_len == 8'd2) && (buf_mem[0] == "S") && (buf_mem[1] == "W");
     // MO<xy>: 4 byte (M, O, col_char, row_char)。座標妥当性は cd_parse_valid で別判定
     wire is_mo = (buf_len == 8'd4) && (buf_mem[0] == "M") && (buf_mem[1] == "O");
+    wire is_pa = (buf_len == 8'd2) && (buf_mem[0] == "P") && (buf_mem[1] == "A");
+    wire is_eb = (buf_len == 8'd2) && (buf_mem[0] == "E") && (buf_mem[1] == "B");
+    wire is_ew = (buf_len == 8'd2) && (buf_mem[0] == "E") && (buf_mem[1] == "W");
+    wire is_ed = (buf_len == 8'd2) && (buf_mem[0] == "E") && (buf_mem[1] == "D");
 
     // ----- 内部状態 + 計算モジュール群 -----
 
@@ -285,20 +301,20 @@ module proto (
                     if (rx_valid) begin
                         if (rx_byte == 8'h0A) begin
                             `ifdef SIMULATION
-                            $display("proto.v:%0d [time=%0d] S_RECV LF  buf_len=%0d → DISPATCH",
+                            if (dbg_en) $display("proto.v:%0d [time=%0d] S_RECV LF  buf_len=%0d → DISPATCH",
                                 `__LINE__, dbg_cycle, buf_len);
                             `endif
                             state <= S_DISPATCH;
                         end else if (buf_len < BUF_SIZE[BUF_LOG2:0]) begin
                             `ifdef SIMULATION
-                            $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) buf[%0d]",
+                            if (dbg_en) $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) buf[%0d]",
                                 `__LINE__, dbg_cycle, rx_byte, rx_byte, buf_len);
                             `endif
                             buf_mem[buf_len[BUF_LOG2-1:0]] <= rx_byte;
                             buf_len <= buf_len + 1'b1;
                         end else begin
                             `ifdef SIMULATION
-                            $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) OVERFLOW buf_len=%0d",
+                            if (dbg_en) $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) OVERFLOW buf_len=%0d",
                                 `__LINE__, dbg_cycle, rx_byte, rx_byte, buf_len);
                             `endif
                             // overflow 時は単に捨てる。LF が来るまで吸収。
@@ -319,7 +335,7 @@ module proto (
                         tx_end <= {1'b0, ROM_ER_OFF + ROM_ER_LEN};
                     end
                     `ifdef SIMULATION
-                    $strobe("proto.v:%0d [time=%0d] S_DISPATCH is={pi=%b ve=%b sb=%b sw=%b mo=%b} cd_valid=%b parse_bit=%0d flip=%016h tx_mode=%0d tx=%0d/%0d",
+                    if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_DISPATCH is={pi=%b ve=%b sb=%b sw=%b mo=%b} cd_valid=%b parse_bit=%0d flip=%016h tx_mode=%0d tx=%0d/%0d",
                         `__LINE__, dbg_cycle,
                         is_pi, is_ve, is_sb, is_sw, is_mo,
                         cd_parse_valid, cd_parse_bit, fc_flip,
@@ -352,12 +368,19 @@ module proto (
                             gs_in_white <= gs_white & ~fc_flip;
                         end
                     end
+                    // EB/EW/ED: 終局 → IDLE 復帰、応答なし
+                    if (is_eb || is_ew || is_ed) begin
+                        gs_cmd_set_phase <= 1'b1;
+                        gs_in_phase      <= PHASE_IDLE;
+                    end
                     buf_len <= 0;
-                    // 自分の手番開始 (SB or 相手 MO 受信) なら 1 cycle 待って
-                    // game_state を確定させてから自分の手を選んで配置する。
-                    // それ以外 (SW/PI/VE/ER02) は S_TX。
-                    if (is_sb || (is_mo && cd_parse_valid)) begin
+                    // 自分の手番開始 (SB / 相手 MO 受信 / 相手 PA 受信) なら
+                    // 1 cycle 待って game_state を確定させてから手を選ぶ。
+                    // EB/EW/ED は応答不要なので S_RECV へ。それ以外は S_TX。
+                    if (is_sb || (is_mo && cd_parse_valid) || is_pa) begin
                         state <= S_WAIT_GS;
+                    end else if (is_eb || is_ew || is_ed) begin
+                        state <= S_RECV;
                     end else begin
                         state <= S_TX;
                     end
@@ -366,14 +389,14 @@ module proto (
                     // 1 cycle wait. game_state.black/white は次 cycle 入り口で
                     // 最新値となり、legal_bb / pick_lsb の組合せ出力も追従する。
                     `ifdef SIMULATION
-                    $strobe("proto.v:%0d [time=%0d] S_WAIT_GS black=%016h white=%016h legal=%016h",
+                    if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_WAIT_GS black=%016h white=%016h legal=%016h",
                         `__LINE__, dbg_cycle, gs_black, gs_white, lb_legal);
                     `endif
                     state <= S_PLACE_MY;
                 end
                 S_PLACE_MY: begin
                     `ifdef SIMULATION
-                    $strobe("proto.v:%0d [time=%0d] S_PLACE_MY ps_valid=%b ps_index=%0d flip=%016h black=%016h white=%016h",
+                    if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_PLACE_MY ps_valid=%b ps_index=%0d flip=%016h black=%016h white=%016h",
                         `__LINE__, dbg_cycle, ps_valid, ps_index, fc_flip, gs_black, gs_white);
                     `endif
                     // この cycle 入り口で game_state.black/white は最新。
@@ -398,8 +421,14 @@ module proto (
                         // MO の後に BS<board>\n を続けて送る
                         tx_pending_bs <= 1'b1;
                     end
-                    // ps_valid=0 (合法手なし、パス相当) のときは tx_mode は
-                    // S_DISPATCH で設定された ER02 のまま (TX_MODE_ROM)
+                    // ps_valid=0 (合法手なし) → PA\n を送出し WAIT_OPP へ
+                    if (!ps_valid) begin
+                        gs_cmd_set_phase <= 1'b1;
+                        gs_in_phase      <= PHASE_WAIT_OPP;
+                        tx_mode <= TX_MODE_ROM;
+                        tx_idx  <= {1'b0, ROM_PA_OFF};
+                        tx_end  <= {1'b0, ROM_PA_OFF + ROM_PA_LEN};
+                    end
                     state <= S_TX;
                 end
                 S_TX: begin
@@ -425,14 +454,14 @@ module proto (
                         tx_valid <= 1'b1;
                         tx_idx   <= tx_idx + 1'b1;
                         `ifdef SIMULATION
-                        $strobe("proto.v:%0d [time=%0d] S_TX  send '%c'(%02x) idx=%0d/%0d mode=%0d",
+                        if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_TX  send '%c'(%02x) idx=%0d/%0d mode=%0d",
                             `__LINE__, dbg_cycle, tx_byte, tx_byte, tx_idx, tx_end, tx_mode);
                         `endif
                     end else begin
                         // MO 送出が終わったら BS をチェイン送信
                         if (tx_pending_bs) begin
                             `ifdef SIMULATION
-                            $strobe("proto.v:%0d [time=%0d] S_TX  MO done → BS chain tx=%0d/%0d",
+                            if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_TX  MO done → BS chain tx=%0d/%0d",
                                 `__LINE__, dbg_cycle, tx_idx, tx_end);
                             `endif
                             tx_pending_bs <= 1'b0;
@@ -442,7 +471,7 @@ module proto (
                             // state は S_TX のまま継続
                         end else begin
                             `ifdef SIMULATION
-                            $strobe("proto.v:%0d [time=%0d] S_TX  done → S_RECV",
+                            if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_TX  done → S_RECV",
                                 `__LINE__, dbg_cycle);
                             `endif
                             state <= S_RECV;
