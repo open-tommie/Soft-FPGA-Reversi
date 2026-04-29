@@ -14,6 +14,7 @@ Verilog ソース（Othello アクセラレータ本体）。
 
 ## 設計方針
 
+- verilogソースは現在のベストプラクティスで読みやすくする。
 - I/O は **バイト粒度以上** のハンドシェイク。UART のビット同期は Verilog に書かない。
 - 盤面は bitboard (`black[63:0]`, `white[63:0]`)。bit 順は `bit_index = r*8 + c`（a1 = bit0）。
 - `pick_lsb` の手順序は Python `reversi_rules.legal_moves()` と完全一致させる（行優先 a1, b1, …）。

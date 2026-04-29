@@ -54,6 +54,7 @@ add_custom_command(
     OUTPUT ${VERILATED_STAMP} ${VERILATED_SOURCES}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${VERILATED_DIR}
     COMMAND ${VERILATOR_BIN} --cc --no-trace --no-timing
+            -DSIMULATION
             -y ${RTL_DIR}
             --Mdir ${VERILATED_DIR}
             ${RTL_DIR}/othello_top.v

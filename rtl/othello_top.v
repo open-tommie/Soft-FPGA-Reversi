@@ -4,12 +4,11 @@
 // HW 合成は想定していない: ホスト側で Verilator により C++ 化され、
 // firmware にリンクされて Pico 2 上で実行される。
 //
-// 構成 (Step 5d 以降):
+// 構成:
 //   - proto: UART テキストプロトコル本体。内部に
 //            game_state / legal_bb / pick_lsb / coord を持つ。
 //
-// 旧 dbg_* port (Step 4 で legal_bb 単独露出用) は proto が同モジュールを
-// 内包したので撤去。firmware からは rx/tx の byte 線だけ見える。
+// firmware からは rx/tx の byte 線のみ公開。
 
 `default_nettype none
 

@@ -30,6 +30,8 @@ services:
     <<: *base
     # Pico SDK 非依存のホスト版 (host/) ビルド & 実行用。
     # stdin/stdout を流したいので tty 無効、stdin_open は有効。
+    # init: true で tini を PID 1 にし、^C (SIGINT) をプロセスに転送する。
+    init: true
     stdin_open: true
     entrypoint: ["scripts/_build-host-inner.sh"]
     command: []

@@ -30,6 +30,17 @@ module proto (
     output reg  [7:0]  tx_byte
 );
 
+    // ----- デバッグ用 cycle カウンタ (シミュレーション専用) -----
+    // rx_valid / tx_valid / 非 S_RECV のときだけ +1。
+    // アイドルループの tick は無視されるので小さい値になる。
+    `ifdef SIMULATION
+    integer dbg_cycle;
+    initial dbg_cycle = 0;
+    always @(posedge clk)
+        if (rx_valid || tx_valid || state != S_RECV)
+            dbg_cycle <= dbg_cycle + 1;
+    `endif
+
     // ----- 行 buffer -----
     parameter integer BUF_LOG2 = 7;            // 128 entries
     parameter integer BUF_SIZE = 1 << BUF_LOG2;
@@ -44,6 +55,7 @@ module proto (
     //      proto の S_PLACE_MY は更新前の値を読んでしまう)
     // S_PLACE_MY: 自分の駒を 1 個盤面に追加し phase WAIT_OPP へ。
     //   - この cycle 入り口で gs_black/white は最新で legal_bb / pick_lsb も valid
+
     localparam [2:0] S_RECV     = 3'd0,
                      S_DISPATCH = 3'd1,
                      S_TX       = 3'd2,
@@ -52,7 +64,7 @@ module proto (
     reg [2:0] state;
 
     // game_state の phase 定義 (game_state.v と同じ)。
-    // PHASE_IDLE / PHASE_MY_TURN は 5d-4 (EB/EW/ED ハンドラ) で使う。
+    // PHASE_IDLE / PHASE_MY_TURN は EB/EW/ED ハンドラで使う。
     /* verilator lint_off UNUSEDPARAM */
     localparam [1:0] PHASE_IDLE     = 2'd0;
     localparam [1:0] PHASE_MY_TURN  = 2'd1;
@@ -60,32 +72,51 @@ module proto (
     localparam [1:0] PHASE_WAIT_OPP = 2'd2;
 
     // ----- 連結 ROM -----
-    // PO\n  / VE01reversi-fw\n  / ER02 unknown\n
-    localparam [5:0] ROM_PO_OFF = 6'd0,  ROM_PO_LEN = 6'd3;
-    localparam [5:0] ROM_VE_OFF = 6'd3,  ROM_VE_LEN = 6'd15;
-    localparam [5:0] ROM_ER_OFF = 6'd18, ROM_ER_LEN = 6'd13;
+    // 各応答文字列。★ 変えるときは *_STR と *_STR_CHARS の 2 箇所だけ更新する ★
+    // LF (\n) は ROM が自動付加するため文字列には含めない。
+    localparam        PO_STR       = "PO";
+    localparam integer PO_STR_CHARS = 2;
+    localparam        VE_STR       = "VE01reversi-fw";
+    localparam integer VE_STR_CHARS = 14;
+    localparam        ER_STR       = "ER02 unknown";
+    localparam integer ER_STR_CHARS = 12;
 
+    localparam [5:0] ROM_PO_OFF = 6'd0;
+    /* verilator lint_off WIDTHTRUNC */
+    localparam [5:0] ROM_PO_LEN = PO_STR_CHARS + 1;   // +LF (integer→6bit は意図的)
+    localparam [5:0] ROM_VE_LEN = VE_STR_CHARS + 1;
+    localparam [5:0] ROM_ER_LEN = ER_STR_CHARS + 1;
+    /* verilator lint_on WIDTHTRUNC */
+    localparam [5:0] ROM_VE_OFF = ROM_PO_OFF + ROM_PO_LEN;
+    localparam [5:0] ROM_ER_OFF = ROM_VE_OFF + ROM_VE_LEN;
+
+    // resp_rom(i): ROM インデックス i に対応する応答バイトを返す。
+    // 各文字列 localparam からバイト抽出して生成する (Verilog 文字列は MSB が先頭文字)。
+    // WIDTHEXPAND は off[5:0] を integer 算術式で使う意図的な拡張。
+    /* verilator lint_off WIDTHEXPAND */
     function automatic [7:0] resp_rom(input [5:0] i);
-        case (i)
-            // "PO\n"
-            6'd0:  resp_rom = "P";    6'd1:  resp_rom = "O";    6'd2:  resp_rom = 8'h0A;
-            // "VE01reversi-fw\n"
-            6'd3:  resp_rom = "V";    6'd4:  resp_rom = "E";    6'd5:  resp_rom = "0";
-            6'd6:  resp_rom = "1";    6'd7:  resp_rom = "r";    6'd8:  resp_rom = "e";
-            6'd9:  resp_rom = "v";    6'd10: resp_rom = "e";    6'd11: resp_rom = "r";
-            6'd12: resp_rom = "s";    6'd13: resp_rom = "i";    6'd14: resp_rom = "-";
-            6'd15: resp_rom = "f";    6'd16: resp_rom = "w";    6'd17: resp_rom = 8'h0A;
-            // "ER02 unknown\n"
-            6'd18: resp_rom = "E";    6'd19: resp_rom = "R";    6'd20: resp_rom = "0";
-            6'd21: resp_rom = "2";    6'd22: resp_rom = " ";    6'd23: resp_rom = "u";
-            6'd24: resp_rom = "n";    6'd25: resp_rom = "k";    6'd26: resp_rom = "n";
-            6'd27: resp_rom = "o";    6'd28: resp_rom = "w";    6'd29: resp_rom = "n";
-            6'd30: resp_rom = 8'h0A;
-            default: resp_rom = 8'h00;
-        endcase
+        reg     [5:0] off;
+        integer       bit_off;
+    begin
+        resp_rom = 8'h00;
+        if (i < ROM_VE_OFF) begin
+            off     = i - ROM_PO_OFF;
+            bit_off = (PO_STR_CHARS - 1 - off) * 8;
+            resp_rom = (i < ROM_VE_OFF - 6'd1) ? PO_STR[bit_off +: 8] : 8'h0A;
+        end else if (i < ROM_ER_OFF) begin
+            off     = i - ROM_VE_OFF;
+            bit_off = (VE_STR_CHARS - 1 - off) * 8;
+            resp_rom = (i < ROM_ER_OFF - 6'd1) ? VE_STR[bit_off +: 8] : 8'h0A;
+        end else begin
+            off     = i - ROM_ER_OFF;
+            bit_off = (ER_STR_CHARS - 1 - off) * 8;
+            resp_rom = (off < ROM_ER_LEN - 6'd1) ? ER_STR[bit_off +: 8] : 8'h0A;
+        end
+    end
     endfunction
+    /* verilator lint_on WIDTHEXPAND */
 
-    // 5d-3d: BS<64char>\n の i 番目バイト
+    // BS<64char>\n の i 番目バイト
     //   i = 0       → 'B'
     //   i = 1       → 'S'
     //   i = 2..65   → cell[i-2] : '0' empty / '1' black / '2' white
@@ -109,11 +140,11 @@ module proto (
     end
     endfunction
 
-    // BS<64char>\n は最大 67 byte なので tx_idx は 7-bit 必要 (5d-3d)
+    // BS<64char>\n は最大 67 byte なので tx_idx は 7-bit 必要
     reg [6:0] tx_idx;     // 現在送信 index (mode によって意味が変わる)
     reg [6:0] tx_end;     // 終了 index (exclusive)
 
-    // 5d-3c/d: TX バイト供給モード
+    // TX バイト供給モード
     //   TX_MODE_ROM PI/VE/ER02 等の固定文字列を resp_rom() で読み出す
     //   TX_MODE_MO  "MO<xy>\n" 5 byte を動的生成 (xy は coord.format 出力)
     //   TX_MODE_BS  "BS<64char>\n" 67 byte を動的生成 (cell は gs_black/white)
@@ -122,7 +153,7 @@ module proto (
     localparam [1:0] TX_MODE_BS  = 2'd2;
     reg [1:0] tx_mode;
 
-    // 5d-3d: MO 送信が終わったら BS<board> を続ける
+    // MO 送信が終わったら BS<board> を続ける
     reg tx_pending_bs;
 
     // S_PLACE_MY で打った手の bit_index。coord.format の入力に使う
@@ -137,10 +168,10 @@ module proto (
     // MO<xy>: 4 byte (M, O, col_char, row_char)。座標妥当性は cd_parse_valid で別判定
     wire is_mo = (buf_len == 8'd4) && (buf_mem[0] == "M") && (buf_mem[1] == "O");
 
-    // ----- Step 5d-1: 内部状態 + 計算モジュール群を instantiate -----
-    // この段階ではまだ FSM から駆動しない (cmd_* は全部 0)。次段で結線。
+    // ----- 内部状態 + 計算モジュール群 -----
 
     // game_state: 盤面 + my_side + phase
+
     reg         gs_cmd_init;
     reg         gs_init_side;
     reg         gs_cmd_set_board;
@@ -185,9 +216,8 @@ module proto (
         .valid(ps_valid), .index(ps_index), .one_hot(ps_one_hot)
     );
 
-    // coord: parse 用は MO 受信時に buf_mem の [2..3] を渡す予定。
+    // coord: parse 用は MO 受信時に buf_mem の [2..3] を渡す。
     //        format 用は pick_lsb の index を渡し、自分の手の文字列を得る。
-    //        Step 5d-1 では parse 入力は 0 固定 (まだ使わない)。
     /* verilator lint_off UNUSEDSIGNAL */
     wire [5:0] cd_parse_bit;
     wire       cd_parse_valid;
@@ -199,14 +229,13 @@ module proto (
     coord u_coord (
         .in_col_char(buf_mem[2]), .in_row_char(buf_mem[3]),
         .parse_bit(cd_parse_bit), .parse_valid(cd_parse_valid),
-        // 5d-3c: format 入力は S_PLACE_MY で捕捉した my_move_bit を使う
+        // format 入力は S_PLACE_MY で捕捉した my_move_bit を使う
         // (ps_index は次 cycle で別の手を指すため、捕捉値で安定させる)
         .in_bit_index(my_move_bit),
         .out_col_char(cd_col_char), .out_row_char(cd_row_char)
     );
 
-    // ===== Step 6: flip_calc =====
-    // 着手で裏返る opp 駒の bitmap を計算する。
+    // flip_calc: 着手で裏返る opp 駒の bitmap を計算する。
     // 入力は state によって 2 通り:
     //   S_PLACE_MY:  own=自分の色, opp=相手の色, move=ps_index   (自分の手)
     //   S_DISPATCH:  own=相手の色, opp=自分の色, move=cd_parse_bit (相手の MO 受信時)
@@ -238,7 +267,6 @@ module proto (
             tx_mode  <= TX_MODE_ROM;
             tx_pending_bs <= 1'b0;
             my_move_bit <= 6'd0;
-            // 5d-1: game_state コマンドはまだ FSM から駆動しない
             gs_cmd_init      <= 0;
             gs_init_side     <= 0;
             gs_cmd_set_board <= 0;
@@ -248,7 +276,7 @@ module proto (
             gs_in_phase      <= 0;
         end else begin
             tx_valid <= 0;  // デフォルト下げ。S_TX で必要なときだけ立てる。
-            // 5d-1: game_state コマンドは毎 cycle 0 に戻す (1-cycle pulse 想定)
+            // game_state コマンドは毎 cycle 0 に戻す (1-cycle pulse 想定)
             gs_cmd_init      <= 0;
             gs_cmd_set_board <= 0;
             gs_cmd_set_phase <= 0;
@@ -256,16 +284,29 @@ module proto (
                 S_RECV: begin
                     if (rx_valid) begin
                         if (rx_byte == 8'h0A) begin
+                            `ifdef SIMULATION
+                            $display("proto.v:%0d [time=%0d] S_RECV LF  buf_len=%0d → DISPATCH",
+                                `__LINE__, dbg_cycle, buf_len);
+                            `endif
                             state <= S_DISPATCH;
                         end else if (buf_len < BUF_SIZE[BUF_LOG2:0]) begin
+                            `ifdef SIMULATION
+                            $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) buf[%0d]",
+                                `__LINE__, dbg_cycle, rx_byte, rx_byte, buf_len);
+                            `endif
                             buf_mem[buf_len[BUF_LOG2-1:0]] <= rx_byte;
                             buf_len <= buf_len + 1'b1;
+                        end else begin
+                            `ifdef SIMULATION
+                            $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) OVERFLOW buf_len=%0d",
+                                `__LINE__, dbg_cycle, rx_byte, rx_byte, buf_len);
+                            `endif
+                            // overflow 時は単に捨てる。LF が来るまで吸収。
                         end
-                        // overflow 時は単に捨てる。LF が来るまで吸収。
                     end
                 end
                 S_DISPATCH: begin
-                    // 5d-3c: TX モードと index/end をセット (デフォルトは ROM 経路)
+                    // TX モードと index/end をセット (デフォルトは ROM 経路)
                     tx_mode <= TX_MODE_ROM;
                     if (is_pi) begin
                         tx_idx <= {1'b0, ROM_PO_OFF};
@@ -277,8 +318,15 @@ module proto (
                         tx_idx <= {1'b0, ROM_ER_OFF};
                         tx_end <= {1'b0, ROM_ER_OFF + ROM_ER_LEN};
                     end
-                    // 5d-2: SB/SW を受けたら game_state を初期化する。
-                    // 応答自体はまだ ER02 のまま (5d-3 で BS / MO 等に置換予定)。
+                    `ifdef SIMULATION
+                    $strobe("proto.v:%0d [time=%0d] S_DISPATCH is={pi=%b ve=%b sb=%b sw=%b mo=%b} cd_valid=%b parse_bit=%0d flip=%016h tx_mode=%0d tx=%0d/%0d",
+                        `__LINE__, dbg_cycle,
+                        is_pi, is_ve, is_sb, is_sw, is_mo,
+                        cd_parse_valid, cd_parse_bit, fc_flip,
+                        tx_mode, tx_idx, tx_end);
+                    `endif
+
+                    // SB/SW を受けたら game_state を初期化する。
                     // gs_cmd_init は 1 cycle のみ立てる (default 0 で次 cycle 戻る)
                     if (is_sb) begin
                         gs_cmd_init  <= 1'b1;
@@ -287,8 +335,8 @@ module proto (
                         gs_cmd_init  <= 1'b1;
                         gs_init_side <= 1'b1;   // White
                     end
-                    // 5d-3a / Step 6: MO<xy> を受けたら相手の駒を盤面に置く。
-                    // Step 6: fc_flip で挟まれた自分の駒を相手色に反転する。
+                    // MO<xy> を受けたら相手の駒を盤面に置く。
+                    // fc_flip で挟まれた自分の駒を相手色に反転する。
                     //   - my_side=0 (Black): opp=White
                     //       white += move + flip、black -= flip
                     //   - my_side=1 (White): opp=Black
@@ -305,7 +353,7 @@ module proto (
                         end
                     end
                     buf_len <= 0;
-                    // 5d-3b: 自分の手番開始 (SB or 相手 MO 受信) なら 1 cycle 待って
+                    // 自分の手番開始 (SB or 相手 MO 受信) なら 1 cycle 待って
                     // game_state を確定させてから自分の手を選んで配置する。
                     // それ以外 (SW/PI/VE/ER02) は S_TX。
                     if (is_sb || (is_mo && cd_parse_valid)) begin
@@ -317,12 +365,20 @@ module proto (
                 S_WAIT_GS: begin
                     // 1 cycle wait. game_state.black/white は次 cycle 入り口で
                     // 最新値となり、legal_bb / pick_lsb の組合せ出力も追従する。
+                    `ifdef SIMULATION
+                    $strobe("proto.v:%0d [time=%0d] S_WAIT_GS black=%016h white=%016h legal=%016h",
+                        `__LINE__, dbg_cycle, gs_black, gs_white, lb_legal);
+                    `endif
                     state <= S_PLACE_MY;
                 end
                 S_PLACE_MY: begin
-                    // 5d-3b: この cycle 入り口で game_state.black/white は最新。
+                    `ifdef SIMULATION
+                    $strobe("proto.v:%0d [time=%0d] S_PLACE_MY ps_valid=%b ps_index=%0d flip=%016h black=%016h white=%016h",
+                        `__LINE__, dbg_cycle, ps_valid, ps_index, fc_flip, gs_black, gs_white);
+                    `endif
+                    // この cycle 入り口で game_state.black/white は最新。
                     // legal_bb → pick_lsb (ps_one_hot) は新盤面で評価された値。
-                    // Step 6: 自分の手 + flip_calc の結果で相手駒を反転。
+                    // 自分の手 + flip_calc の結果で相手駒を反転。
                     if (ps_valid) begin
                         gs_cmd_set_board <= 1'b1;
                         if (gs_my_side == 1'b0) begin
@@ -334,12 +390,12 @@ module proto (
                         end
                         gs_cmd_set_phase <= 1'b1;
                         gs_in_phase <= PHASE_WAIT_OPP;
-                        // 5d-3c: 自分の手の bit_index を捕捉 + TX を MO モードに
+                        // 自分の手の bit_index を捕捉 + TX を MO モードに
                         my_move_bit <= ps_index;
                         tx_mode <= TX_MODE_MO;
                         tx_idx  <= 7'd0;
                         tx_end  <= 7'd5;            // "MO<x><y>\n" = 5 byte
-                        // 5d-3d: MO の後に BS<board>\n を続けて送る
+                        // MO の後に BS<board>\n を続けて送る
                         tx_pending_bs <= 1'b1;
                     end
                     // ps_valid=0 (合法手なし、パス相当) のときは tx_mode は
@@ -348,7 +404,7 @@ module proto (
                 end
                 S_TX: begin
                     if (tx_idx < tx_end) begin
-                        // 5d-3c/d: tx_mode で source を切替
+                        // tx_mode で source を切替
                         case (tx_mode)
                             TX_MODE_ROM: tx_byte <= resp_rom(tx_idx[5:0]);
                             TX_MODE_MO: begin
@@ -368,15 +424,27 @@ module proto (
                         endcase
                         tx_valid <= 1'b1;
                         tx_idx   <= tx_idx + 1'b1;
+                        `ifdef SIMULATION
+                        $strobe("proto.v:%0d [time=%0d] S_TX  send '%c'(%02x) idx=%0d/%0d mode=%0d",
+                            `__LINE__, dbg_cycle, tx_byte, tx_byte, tx_idx, tx_end, tx_mode);
+                        `endif
                     end else begin
-                        // 5d-3d: MO 送出が終わったら BS をチェイン送信
+                        // MO 送出が終わったら BS をチェイン送信
                         if (tx_pending_bs) begin
+                            `ifdef SIMULATION
+                            $strobe("proto.v:%0d [time=%0d] S_TX  MO done → BS chain tx=%0d/%0d",
+                                `__LINE__, dbg_cycle, tx_idx, tx_end);
+                            `endif
                             tx_pending_bs <= 1'b0;
                             tx_mode <= TX_MODE_BS;
                             tx_idx  <= 7'd0;
                             tx_end  <= 7'd67;   // "BS" + 64 cell + "\n"
                             // state は S_TX のまま継続
                         end else begin
+                            `ifdef SIMULATION
+                            $strobe("proto.v:%0d [time=%0d] S_TX  done → S_RECV",
+                                `__LINE__, dbg_cycle);
+                            `endif
                             state <= S_RECV;
                         end
                     end
