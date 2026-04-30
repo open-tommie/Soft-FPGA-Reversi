@@ -8,17 +8,18 @@
 //   - putchar_raw            ↔  fputc + fflush
 //   - LED 点滅 / sleep_ms 等の Pico 機能は持たない
 //
-// EOF を受け取ると DUT に LF を 1 byte 流して残応答を吐かせ、tx_valid が
-// 一定 cycle 静まったら終了する。これでシナリオファイルを `<` リダイレクト
+// EOF を受け取ると DUT に CR+LF (2 byte) を流して残応答を吐かせ、tx_valid
+// が一定 cycle 静まったら終了する。これでシナリオファイルを `<` リダイレクト
 // した時に綺麗に終わる。
 //
 // 重要: Pico 版は UART (~87µs/byte) で自然に律速されるが、ホスト版は
-// stdin pipe から無限速で食えてしまう。proto.v の FSM は LF 受領後
+// stdin pipe から無限速で食えてしまう。proto.v の FSM は CR+LF 受領後
 // S_DISPATCH / S_TX に遷移していて RX を取り込まないので、ナイーブに
 // 流すと "応答中の次行" が丸ごと落ちる。
-// → LF を流したら tx_valid が立って下がりきるまで stdin を読まない。
+// → CR+LF を流したら tx_valid が立って下がりきるまで stdin を読まない。
 
 #include <fcntl.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cstdint>
@@ -104,12 +105,126 @@ void debug_print(const Vothello_top* dut, uint64_t cycle) {
         tx_mode_name(tx_mode), tx_idx, tx_end);
 }
 
+// eval() 実測用アキュムレータ
+static uint64_t s_eval_ns  = 0;
+static uint64_t s_tick_count = 0;
+
+static inline uint64_t now_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
+}
+
 void tick(Vothello_top* dut) {
+    const uint64_t t0 = now_ns();
     dut->clk = 0;
     dut->eval();
     dut->clk = 1;
     dut->eval();
+    s_eval_ns += now_ns() - t0;
+    ++s_tick_count;
     dut->contextp()->timeInc(1);
+}
+
+// verbose=true: stderr 向けの詳細フォーマット
+// verbose=false: プロトコル応答 "BM clk=X.XXXMHz tick=XX.Xns\n"
+void bench_report(FILE* out, bool verbose) {
+    if (s_tick_count == 0) return;
+    const double ns_per_tick = static_cast<double>(s_eval_ns) /
+                               static_cast<double>(s_tick_count);
+    const double soft_clk_hz = 1e9 / ns_per_tick;
+    if (verbose) {
+        fprintf(out,
+            "[bench] ticks=%llu  eval_total=%.3f ms"
+            "  per_tick=%.1f ns  soft-FPGA clk=%.3f MHz\n",
+            (unsigned long long)s_tick_count,
+            static_cast<double>(s_eval_ns) / 1e6,
+            ns_per_tick,
+            soft_clk_hz / 1e6);
+    } else {
+        fprintf(out, "BM clk=%.3fMHz tick=%.1fns\r\n",
+            soft_clk_hz / 1e6, ns_per_tick);
+        std::fflush(out);
+    }
+}
+
+// __DATE__ ("Mmm DD YYYY") → "YYYY-MM-DD" に変換する
+static void date_iso(char out[11]) {
+    static const char kMon[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char* d = __DATE__;
+    int mi = 0;
+    for (; mi < 12; ++mi)
+        if (d[0]==kMon[mi*3] && d[1]==kMon[mi*3+1] && d[2]==kMon[mi*3+2]) break;
+    const int dd = (d[4]==' ') ? (d[5]-'0') : ((d[4]-'0')*10+(d[5]-'0'));
+    out[0]=d[7]; out[1]=d[8]; out[2]=d[9]; out[3]=d[10];
+    out[4]='-';
+    out[5]='0'+(mi+1)/10; out[6]='0'+(mi+1)%10;
+    out[7]='-';
+    out[8]='0'+dd/10;     out[9]='0'+dd%10;
+    out[10]='\0';
+}
+
+// /proc と /etc/os-release からプラットフォーム文字列を構築する
+// 例: "WSL2 Ubuntu24"、"Ubuntu24"、"Linux"
+static void platform_str(char* out, int out_size) {
+    bool is_wsl2 = false;
+    {
+        std::FILE* f = std::fopen("/proc/sys/kernel/osrelease", "r");
+        if (f) {
+            char buf[128] = {};
+            if (std::fgets(buf, sizeof(buf), f))
+                is_wsl2 = std::strstr(buf, "WSL2") || std::strstr(buf, "microsoft");
+            std::fclose(f);
+        }
+    }
+
+    char os_name[32] = "Linux";
+    char os_ver[16]  = "";
+    {
+        std::FILE* f = std::fopen("/etc/os-release", "r");
+        if (f) {
+            char line[128];
+            while (std::fgets(line, sizeof(line), f)) {
+                const char* val;
+                char* p;
+                if (std::strncmp(line, "NAME=", 5) == 0) {
+                    val = line + 5;
+                    if (*val == '"') ++val;
+                    p = os_name;
+                    while (*val && *val != '"' && *val != '\n' &&
+                           p < os_name + (int)sizeof(os_name) - 1)
+                        *p++ = *val++;
+                    *p = '\0';
+                } else if (std::strncmp(line, "VERSION_ID=", 11) == 0) {
+                    val = line + 11;
+                    if (*val == '"') ++val;
+                    p = os_ver;
+                    // "24.04" をそのまま取得
+                    while (*val && *val != '"' && *val != '\n' &&
+                           p < os_ver + (int)sizeof(os_ver) - 1)
+                        *p++ = *val++;
+                    *p = '\0';
+                }
+            }
+            std::fclose(f);
+        }
+    }
+
+    if (is_wsl2)
+        std::snprintf(out, out_size, "WSL2 %s%s", os_name, os_ver);
+    else
+        std::snprintf(out, out_size, "%s%s", os_name, os_ver);
+}
+
+void id_report(FILE* out) {
+    char bld[11];
+    date_iso(bld);
+    char pf[48];
+    platform_str(pf, sizeof(pf));
+    fprintf(out, "ID pf=%s git=%s vl=%s bld=%s\r\n",
+            pf, GIT_HASH, VERILATOR_VER, bld);
+    std::fflush(out);
 }
 
 void apply_reset(Vothello_top* dut) {
@@ -164,54 +279,100 @@ int main(int argc, char** argv) {
 
     bool stdin_eof = false;
     bool eof_lf_sent = false;
-    bool last_was_lf = false;
+    bool last_was_crlf = false;  // 最後にディスパッチされた行が CR+LF で終わったか
     int quiescent = 0;
     uint64_t cycle = 0;
 
-    // LF を流した後の「応答待ち」フラグ。tx_valid が一度立って、
+    // CR+LF を流した後の「応答待ち」フラグ。tx_valid が一度立って、
     // その後 KSettleCycles cycle 連続で 0 になるまで次の RX を読まない。
     bool awaiting_response = false;
     bool seen_tx_in_response = false;
     int  tx_quiet = 0;
     constexpr int kSettleCycles = 4;
 
+    // BM/ID コマンドインターセプト用ラインバッファ。
+    // 行終端は CR+LF (etc/protocol.md)。stdin から CR+LF までを 1 行として
+    // 区切り、"BM\r\n" / "ID\r\n" は DUT に渡さず C++ 側で応答する。
+    // それ以外の行はバイト列をそのまま (CR+LF も含めて) DUT に流す。
+    char rx_linebuf[36] = {};
+    int  rx_linebuf_len = 0;
+    bool rx_line_ready  = false;  // CR+LF まで揃った → リプレイ待ち
+    int  rx_replay_pos  = 0;
+
     while (true) {
         const bool dut_ready = !awaiting_response;
 
-        // RX: ready のときだけ 1 byte 取って DUT に投入
-        if (dut_ready && !stdin_eof) {
+        // Phase A: stdin → rx_linebuf（ライン未完成 かつ DUT 準備済み or 行途中）
+        if (!rx_line_ready && !stdin_eof && (dut_ready || rx_linebuf_len > 0)) {
             uint8_t b;
             switch (read_stdin_byte(&b)) {
                 case RxState::Byte:
-                    dut->rx_byte = b;
-                    dut->rx_valid = 1;
-                    last_was_lf = (b == '\n');
-                    if (last_was_lf) {
-                        awaiting_response = true;
-                        seen_tx_in_response = false;
-                        tx_quiet = 0;
+                    if (rx_linebuf_len < 34)
+                        rx_linebuf[rx_linebuf_len++] = static_cast<char>(b);
+                    // CR+LF を行終端として検出
+                    if (rx_linebuf_len >= 2 &&
+                        rx_linebuf[rx_linebuf_len - 2] == '\r' &&
+                        rx_linebuf[rx_linebuf_len - 1] == '\n') {
+                        // 4 bytes ("XX\r\n") のコマンドをインターセプト
+                        if (rx_linebuf_len == 4 &&
+                            rx_linebuf[0] == 'B' && rx_linebuf[1] == 'M') {
+                            bench_report(stdout, false);
+                            rx_linebuf_len = 0;
+                            last_was_crlf  = true;
+                        } else if (rx_linebuf_len == 4 &&
+                                   rx_linebuf[0] == 'I' && rx_linebuf[1] == 'D') {
+                            id_report(stdout);
+                            rx_linebuf_len = 0;
+                            last_was_crlf  = true;
+                        } else {
+                            rx_line_ready = true;
+                            rx_replay_pos = 0;
+                        }
                     }
                     break;
                 case RxState::Empty:
-                    dut->rx_valid = 0;
                     break;
                 case RxState::Eof:
                     stdin_eof = true;
-                    dut->rx_valid = 0;
+                    // バッファに残った途中行へ CR+LF を補完してキュー
+                    if (rx_linebuf_len > 0) {
+                        if (rx_linebuf_len < 35)
+                            rx_linebuf[rx_linebuf_len++] = '\r';
+                        if (rx_linebuf_len < 35)
+                            rx_linebuf[rx_linebuf_len++] = '\n';
+                        rx_line_ready = true;
+                        rx_replay_pos = 0;
+                    } else if (!last_was_crlf) {
+                        rx_linebuf[0]  = '\r';
+                        rx_linebuf[1]  = '\n';
+                        rx_linebuf_len = 2;
+                        rx_line_ready  = true;
+                        rx_replay_pos  = 0;
+                    }
                     break;
             }
-        } else if (dut_ready && stdin_eof && !eof_lf_sent) {
-            // 行末が LF で終わっていないシナリオでも残応答を吐けるよう
-            // EOF 検出時に LF を補う。最後に流したバイトが既に LF なら不要。
+        }
+
+        // stdin_eof かつバッファ空 → quiescent カウント用フラグを立てる
+        if (stdin_eof && !rx_line_ready && rx_linebuf_len == 0)
             eof_lf_sent = true;
-            if (!last_was_lf) {
-                dut->rx_byte = '\n';
-                dut->rx_valid = 1;
-                awaiting_response = true;
+
+        // Phase B: rx_linebuf → DUT（1 byte/cycle、DUT 準備済みのときのみ）
+        if (rx_line_ready && dut_ready) {
+            const uint8_t b = static_cast<uint8_t>(rx_linebuf[rx_replay_pos++]);
+            dut->rx_byte  = b;
+            dut->rx_valid = 1;
+            // LF を流し終えた瞬間にディスパッチ確定 (LF 単独 / CR+LF どちらも)
+            last_was_crlf = (b == '\n');
+            if (b == '\n') {
+                awaiting_response   = true;
                 seen_tx_in_response = false;
-                tx_quiet = 0;
-            } else {
-                dut->rx_valid = 0;
+                tx_quiet            = 0;
+            }
+            if (rx_replay_pos >= rx_linebuf_len) {
+                rx_line_ready  = false;
+                rx_linebuf_len = 0;
+                rx_replay_pos  = 0;
             }
         } else {
             dut->rx_valid = 0;
@@ -253,6 +414,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    bench_report(stderr, true);
     delete dut;
     delete ctx;
     return 0;

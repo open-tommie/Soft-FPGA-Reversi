@@ -72,7 +72,8 @@
    ┌──────────┐
    │ S_RECV   │ ← 起動時、応答送信完了後に戻る
    └────┬─────┘
-        │ rx_valid + LF (0x0A)
+        │ CR (0x0D) で saw_cr 立てる → 続く LF (0x0A) でディスパッチ
+        │ (LF 単独 / CR + 非 LF はバッファ破棄、再同期待ち)
         ▼
    ┌──────────┐
    │S_DISPATCH│ コマンドを判定し:
@@ -89,12 +90,12 @@
         ▼
    ┌──────────┐
    │S_PLACE_MY│ legal_bb → pick_lsb で自分の手選択、flip_calc で反転
-   │          │ tx_mode = TX_MODE_MO (動的 "MO<xy>\n"), tx_pending_bs=1
+   │          │ tx_mode = TX_MODE_MO (動的 "MO<xy>\r\n"), tx_pending_bs=1
    └────┬─────┘
         ▼
    ┌──────────┐
    │  S_TX    │ tx_mode (ROM/MO/BS) で 1 byte/cycle 送信
-   │          │ MO 完了 → BS<board>\n をチェイン送信
+   │          │ MO 完了 → BS<board>\r\n をチェイン送信
    └────┬─────┘
         │ tx_idx == tx_end (BS 後)
         ▼
@@ -111,15 +112,18 @@
 
 ## プロトコル応答 (現状)
 
+行終端は受信・送信ともに **CR+LF (`\r\n`, 0x0D 0x0A)**。
+LF 単独・CR 単独は仕様違反としてバッファ破棄（[`etc/protocol.md`](protocol.md)）。
+
 | 受信 | 応答 |
 | --- | --- |
-| `PI\n` | `PO\n` |
-| `VE\n` | `VE01reversi-fw\n` |
-| `SB\n` | `MO<xy>\n` + `BS<64char>\n` (黒の初手 d3 + 反転後の盤面) |
-| `SW\n` | `ER02 unknown\n` (白先手なので相手の MO を待つ、未対応) |
-| `MO<xy>\n` (合法 lowercase) | `MO<my>\n` + `BS<board>\n` (相手の手を盤面に反映 + 自分の手) |
-| `MO<XY>\n` (大文字等) | `ER02 unknown\n` (パースエラー) |
-| その他 | `ER02 unknown\n` |
+| `PI\r\n` | `PO\r\n` |
+| `VE\r\n` | `VE01reversi-fw\r\n` |
+| `SB\r\n` | `MO<xy>\r\n` + `BS<64char>\r\n` (黒の初手 d3 + 反転後の盤面) |
+| `SW\r\n` | `ER02 unknown\r\n` (白先手なので相手の MO を待つ、未対応) |
+| `MO<xy>\r\n` (合法 lowercase) | `MO<my>\r\n` + `BS<board>\r\n` (相手の手を盤面に反映 + 自分の手) |
+| `MO<XY>\r\n` (大文字等) | `ER02 unknown\r\n` (パースエラー) |
+| その他 | `ER02 unknown\r\n` |
 
 `PA` / `BO` / `EB` / `EW` / `ED` は未対応 (将来 Step)。
 
@@ -127,4 +131,4 @@
 
 [`verif/tb_unit/`](../verif/tb_unit/) — cocotb 単体 (Verilator backend、~10 秒で 53 テスト ~50,000 件)
 [`verif/tb_hil/`](../verif/tb_hil/) — pyserial 経由の HIL (Pico 2 + Probe UART 中継)
-[`verif/golden/reversi_rules.py`](../verif/golden/reversi_rules.py) — Python 唯一の golden、tommie-chat からコピー
+[`verif/golden/reversi_rules.py`](../verif/golden/reversi_rules.py) — Python 唯一の golden 参照実装

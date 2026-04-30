@@ -1,6 +1,6 @@
 """シナリオ回帰テスト: verif/golden/scenarios/*.txt を実機 firmware に流す。
 
-シナリオファイル形式 (project 24 / tommie-chat と共通):
+シナリオファイル形式 (`scenarios/*.txt`):
     TX <cmd>  … ホスト側が firmware に送るコマンド (改行なし)
     RX <resp> … firmware から期待される応答
     #         … コメント行、空行は無視
@@ -66,7 +66,7 @@ def reset_firmware(dut) -> None:
     EB は無応答なので送信後に入力バッファをクリアするだけでよい。
     """
     dut.reset_input_buffer()
-    dut.write(b"EB\n")
+    dut.write(b"EB\r\n")
     time.sleep(0.05)
     dut.reset_input_buffer()
 
@@ -81,7 +81,7 @@ def test_scenario(dut, scenario_path: Path) -> None:
     steps = _parse(scenario_path)
     for step_i, (kind, text) in enumerate(steps):
         if kind == "TX":
-            dut.write(f"{text}\n".encode("ascii"))
+            dut.write(f"{text}\r\n".encode("ascii"))
         else:
             actual = _recv(dut)
             assert _match(actual, text), (

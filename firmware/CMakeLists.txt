@@ -93,16 +93,38 @@ target_compile_options(firmware PRIVATE
     -Wall
     -Wextra
 )
+# --- ビルドメタデータ ---
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+execute_process(
+    COMMAND git diff-index --quiet HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    RESULT_VARIABLE GIT_IS_DIRTY
+    ERROR_QUIET)
+if(GIT_IS_DIRTY)
+    string(APPEND GIT_HASH "+")
+endif()
+if(NOT GIT_HASH)
+    set(GIT_HASH "unknown")
+endif()
+
 target_compile_definitions(firmware PRIVATE
     NDEBUG
     # 当方は %lu / %s / %d しか使わないので float / 指数は要らない。
     # _etoa / _ftoa / _strtod_l / _dtoa_r 等の引きずりを防ぐ (~3-5 KiB)。
     PICO_PRINTF_SUPPORT_FLOAT=0
     PICO_PRINTF_SUPPORT_EXPONENTIAL=0
+    GIT_HASH="${GIT_HASH}"
+    PICO_PLATFORM_STR="${PICO_PLATFORM}"
 )
 
 target_link_libraries(firmware
     pico_stdlib
+    hardware_clocks
 )
 
 pico_enable_stdio_usb(firmware 1)

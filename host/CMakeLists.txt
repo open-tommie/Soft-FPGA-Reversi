@@ -83,6 +83,40 @@ set_source_files_properties(
     PROPERTIES COMPILE_FLAGS "-w"
 )
 
+# --- ビルドメタデータ ---
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+execute_process(
+    COMMAND git diff-index --quiet HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    RESULT_VARIABLE GIT_IS_DIRTY
+    ERROR_QUIET)
+if(GIT_IS_DIRTY)
+    string(APPEND GIT_HASH "+")
+endif()
+if(NOT GIT_HASH)
+    set(GIT_HASH "unknown")
+endif()
+
+execute_process(
+    COMMAND ${VERILATOR_BIN} --version
+    OUTPUT_VARIABLE _VL_VER_RAW
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+string(REGEX MATCH "[0-9]+\\.[0-9]+" VERILATOR_VER "${_VL_VER_RAW}")
+if(NOT VERILATOR_VER)
+    set(VERILATOR_VER "unknown")
+endif()
+
+target_compile_definitions(reversi_host PRIVATE
+    GIT_HASH="${GIT_HASH}"
+    VERILATOR_VER="${VERILATOR_VER}"
+)
+
 target_compile_options(reversi_host PRIVATE
     -O2
     -Wall

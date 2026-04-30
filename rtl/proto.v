@@ -5,14 +5,14 @@
 //
 // 速度ではなく「Verilog で書いて Pico 2 上で動く」ことが目的。
 //
-// 仕様 (etc/protocol.md §61 のサブセット、Bootstrap step 3 相当):
-//   - PI         → "PO\n"
-//   - VE         → "VE01reversi-fw\n"
-//   - その他全部 → "ER02 unknown\n"
+// 仕様 (etc/protocol.md のサブセット、Bootstrap step 3 相当):
+//   - PI         → "PO\r\n"
+//   - VE         → "VE01reversi-fw\r\n"
+//   - その他全部 → "ER02 unknown\r\n"
 //
 // インターフェース:
 //   - rx_valid を 1 cycle pulse して rx_byte をラッチさせる。
-//     LF (0x0A) を受けると行をディスパッチ。
+//     行終端は LF (0x0A)。CR (0x0D) は無視する。CR+LF / LF 単独どちらも受け付ける。
 //   - tx_valid は応答送信中、1 byte あたり 1 cycle High。
 //     tx_byte は同時に有効。ホスト側はサンプリングするだけで OK。
 //   - 行 buffer は 128 byte。BO<64 char> 等の将来拡張用に余裕を持たせる。
@@ -89,10 +89,10 @@ module proto (
 
     localparam [5:0] ROM_PO_OFF = 6'd0;
     /* verilator lint_off WIDTHTRUNC */
-    localparam [5:0] ROM_PO_LEN = PO_STR_CHARS + 1;   // +LF (integer→6bit は意図的)
-    localparam [5:0] ROM_VE_LEN = VE_STR_CHARS + 1;
-    localparam [5:0] ROM_ER_LEN = ER_STR_CHARS + 1;
-    localparam [5:0] ROM_PA_LEN = PA_STR_CHARS + 1;
+    localparam [5:0] ROM_PO_LEN = PO_STR_CHARS + 2;   // +CR+LF (integer→6bit は意図的)
+    localparam [5:0] ROM_VE_LEN = VE_STR_CHARS + 2;
+    localparam [5:0] ROM_ER_LEN = ER_STR_CHARS + 2;
+    localparam [5:0] ROM_PA_LEN = PA_STR_CHARS + 2;
     /* verilator lint_on WIDTHTRUNC */
     localparam [5:0] ROM_VE_OFF = ROM_PO_OFF + ROM_PO_LEN;
     localparam [5:0] ROM_ER_OFF = ROM_VE_OFF + ROM_VE_LEN;
@@ -110,31 +110,40 @@ module proto (
         if (i < ROM_VE_OFF) begin
             off     = i - ROM_PO_OFF;
             bit_off = (PO_STR_CHARS - 1 - off) * 8;
-            resp_rom = (i < ROM_VE_OFF - 6'd1) ? PO_STR[bit_off +: 8] : 8'h0A;
+            if      (i < ROM_VE_OFF - 6'd2) resp_rom = PO_STR[bit_off +: 8];
+            else if (i < ROM_VE_OFF - 6'd1) resp_rom = 8'h0D;  // CR
+            else                             resp_rom = 8'h0A;  // LF
         end else if (i < ROM_ER_OFF) begin
             off     = i - ROM_VE_OFF;
             bit_off = (VE_STR_CHARS - 1 - off) * 8;
-            resp_rom = (i < ROM_ER_OFF - 6'd1) ? VE_STR[bit_off +: 8] : 8'h0A;
+            if      (i < ROM_ER_OFF - 6'd2) resp_rom = VE_STR[bit_off +: 8];
+            else if (i < ROM_ER_OFF - 6'd1) resp_rom = 8'h0D;  // CR
+            else                             resp_rom = 8'h0A;  // LF
         end else if (i < ROM_PA_OFF) begin
             off     = i - ROM_ER_OFF;
             bit_off = (ER_STR_CHARS - 1 - off) * 8;
-            resp_rom = (off < ROM_ER_LEN - 6'd1) ? ER_STR[bit_off +: 8] : 8'h0A;
+            if      (off < ROM_ER_LEN - 6'd2) resp_rom = ER_STR[bit_off +: 8];
+            else if (off < ROM_ER_LEN - 6'd1) resp_rom = 8'h0D;  // CR
+            else                               resp_rom = 8'h0A;  // LF
         end else begin
             off     = i - ROM_PA_OFF;
             bit_off = (PA_STR_CHARS - 1 - off) * 8;
-            resp_rom = (i < ROM_PA_OFF + PA_STR_CHARS) ? PA_STR[bit_off +: 8] : 8'h0A;
+            if      (i < ROM_PA_OFF + PA_STR_CHARS) resp_rom = PA_STR[bit_off +: 8];
+            else if (off < ROM_PA_LEN - 6'd1)       resp_rom = 8'h0D;  // CR
+            else                                     resp_rom = 8'h0A;  // LF
         end
     end
     endfunction
     /* verilator lint_on WIDTHEXPAND */
 
-    // BS<64char>\n の i 番目バイト
+    // BS<64char>\r\n の i 番目バイト
     //   i = 0       → 'B'
     //   i = 1       → 'S'
     //   i = 2..65   → cell[i-2] : '0' empty / '1' black / '2' white
     //                 (etc/protocol.md §7 行優先 a1, b1, ..., h1, a2, b2, ..., h8)
     //                 bit_index = (i-2) で gs_black/white を引く
-    //   i = 66      → '\n'
+    //   i = 66      → '\r' (CR)
+    //   i = 67      → '\n' (LF)
     function automatic [7:0] bs_byte(
         input [6:0]  i,
         input [63:0] black,
@@ -145,7 +154,8 @@ module proto (
         cell_idx = i[5:0] - 6'd2;
         if      (i == 7'd0)  bs_byte = "B";
         else if (i == 7'd1)  bs_byte = "S";
-        else if (i == 7'd66) bs_byte = 8'h0A;
+        else if (i == 7'd66) bs_byte = 8'h0D;  // CR
+        else if (i == 7'd67) bs_byte = 8'h0A;  // LF
         else if (white[cell_idx]) bs_byte = "2";
         else if (black[cell_idx]) bs_byte = "1";
         else                       bs_byte = "0";
@@ -158,8 +168,8 @@ module proto (
 
     // TX バイト供給モード
     //   TX_MODE_ROM PI/VE/ER02 等の固定文字列を resp_rom() で読み出す
-    //   TX_MODE_MO  "MO<xy>\n" 5 byte を動的生成 (xy は coord.format 出力)
-    //   TX_MODE_BS  "BS<64char>\n" 67 byte を動的生成 (cell は gs_black/white)
+    //   TX_MODE_MO  "MO<xy>\r\n" 6 byte を動的生成 (xy は coord.format 出力)
+    //   TX_MODE_BS  "BS<64char>\r\n" 68 byte を動的生成 (cell は gs_black/white)
     localparam [1:0] TX_MODE_ROM = 2'd0;
     localparam [1:0] TX_MODE_MO  = 2'd1;
     localparam [1:0] TX_MODE_BS  = 2'd2;
@@ -300,11 +310,14 @@ module proto (
                 S_RECV: begin
                     if (rx_valid) begin
                         if (rx_byte == 8'h0A) begin
+                            // LF: 行終端 → ディスパッチ (LF 単独 / CR+LF どちらも)
                             `ifdef SIMULATION
-                            if (dbg_en) $display("proto.v:%0d [time=%0d] S_RECV LF  buf_len=%0d → DISPATCH",
+                            if (dbg_en) $display("proto.v:%0d [time=%0d] S_RECV LF buf_len=%0d → DISPATCH",
                                 `__LINE__, dbg_cycle, buf_len);
                             `endif
                             state <= S_DISPATCH;
+                        end else if (rx_byte == 8'h0D) begin
+                            // CR: 無視 (CR+LF の CR は捨てる)
                         end else if (buf_len < BUF_SIZE[BUF_LOG2:0]) begin
                             `ifdef SIMULATION
                             if (dbg_en) $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) buf[%0d]",
@@ -317,7 +330,7 @@ module proto (
                             if (dbg_en) $display("proto.v:%0d [time=%0d] S_RECV '%c'(%02x) OVERFLOW buf_len=%0d",
                                 `__LINE__, dbg_cycle, rx_byte, rx_byte, buf_len);
                             `endif
-                            // overflow 時は単に捨てる。LF が来るまで吸収。
+                            // overflow 時は単に捨てる
                         end
                     end
                 end
@@ -417,7 +430,7 @@ module proto (
                         my_move_bit <= ps_index;
                         tx_mode <= TX_MODE_MO;
                         tx_idx  <= 7'd0;
-                        tx_end  <= 7'd5;            // "MO<x><y>\n" = 5 byte
+                        tx_end  <= 7'd6;            // "MO<x><y>\r\n" = 6 byte
                         // MO の後に BS<board>\n を続けて送る
                         tx_pending_bs <= 1'b1;
                     end
@@ -437,13 +450,14 @@ module proto (
                         case (tx_mode)
                             TX_MODE_ROM: tx_byte <= resp_rom(tx_idx[5:0]);
                             TX_MODE_MO: begin
-                                // "M", "O", col, row, "\n"
+                                // "M", "O", col, row, "\r", "\n"
                                 case (tx_idx[2:0])
                                     3'd0: tx_byte <= "M";
                                     3'd1: tx_byte <= "O";
                                     3'd2: tx_byte <= cd_col_char;
                                     3'd3: tx_byte <= cd_row_char;
-                                    3'd4: tx_byte <= 8'h0A;
+                                    3'd4: tx_byte <= 8'h0D;  // CR
+                                    3'd5: tx_byte <= 8'h0A;  // LF
                                     default: tx_byte <= 8'h00;
                                 endcase
                             end
@@ -467,7 +481,7 @@ module proto (
                             tx_pending_bs <= 1'b0;
                             tx_mode <= TX_MODE_BS;
                             tx_idx  <= 7'd0;
-                            tx_end  <= 7'd67;   // "BS" + 64 cell + "\n"
+                            tx_end  <= 7'd68;   // "BS" + 64 cell + "\r\n"
                             // state は S_TX のまま継続
                         end else begin
                             `ifdef SIMULATION

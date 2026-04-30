@@ -45,12 +45,12 @@ UART のビット同期は Verilog に書かない。バイトが揃った瞬間
 
 ### C. Python リファレンス実装 = 単一情報源
 
-[tommieChat](https://github.com/open-tommie/24-mmo-Tommie-chat) の `test/reversi/reversi_rules.py` を
+[`verif/golden/reversi_rules.py`](../verif/golden/reversi_rules.py) を
 唯一の golden として全テストが参照する。Verilog の挙動が Python と異なれば **Verilog を直す**。
 
 ### D. シナリオ回帰を最初に立てる
 
-`test/reversi/scenarios/*.txt` と `--replay` 形式を最初の MVP の段階で回せるようにする。
+シナリオ (`*.txt`) と `--replay` 形式を最初の MVP の段階で回せるようにする。
 後付けで導入しようとすると、過去のバグが回帰に乗らない。
 
 ### E. ホスト Verilator ビルドと実機 Pico 2 ビルドを同居

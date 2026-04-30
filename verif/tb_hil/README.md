@@ -77,10 +77,10 @@ pytest 起動
 ## 拡張方針
 
 - **Step 3 (UART テキストプロトコル)**: `test_proto_pi_ve.py` を追加し、
-  `dut.write(b"PI\n")` → `expect(r"^PO ")` 形式で疎通確認
-- **シナリオ回帰**: tommieChat の `test/reversi/scenarios/` の `*.txt` を
-  `verif/tb_protocol/scenarios/` 経由で読み込み、各局面で `dut.write` →
-  `reversi_rules.legal_moves(board)` と `expect` 結果を比較
+  `dut.write(b"PI\r\n")` → `expect(r"^PO ")` 形式で疎通確認
+- **シナリオ回帰**: `verif/golden/scenarios/*.txt` を読み込み、
+  各局面で `dut.write` → `reversi_rules.legal_moves(board)` と
+  `expect` 結果を比較
 - **Verilator host との共用**: `dut` フィクスチャを差し替えるだけで
   「USB-CDC 経由」と「Verilator stdin/stdout 経由」を切替可能にし、
   Step 2 の host 回帰と同じテスト本体を流す
