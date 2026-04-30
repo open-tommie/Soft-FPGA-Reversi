@@ -283,12 +283,15 @@ int main(int argc, char** argv) {
     int quiescent = 0;
     uint64_t cycle = 0;
 
-    // CR+LF を流した後の「応答待ち」フラグ。tx_valid が一度立って、
-    // その後 KSettleCycles cycle 連続で 0 になるまで次の RX を読まない。
-    bool awaiting_response = false;
+    // LF を流した後の「応答待ち」フラグ。以下のいずれかで復帰:
+    //   - tx_valid が 1 度立ってから kSettleCycles 連続で 0 になる (通常応答)
+    //   - LF 以後 kMaxSilentCycles 経過しても TX が無い           (EB/EW/ED 等)
+    bool awaiting_response   = false;
     bool seen_tx_in_response = false;
-    int  tx_quiet = 0;
-    constexpr int kSettleCycles = 4;
+    int  tx_quiet            = 0;
+    int  cycles_since_lf     = 0;
+    constexpr int kSettleCycles    = 4;
+    constexpr int kMaxSilentCycles = 16;
 
     // BM/ID コマンドインターセプト用ラインバッファ。
     // 行終端は CR+LF (etc/protocol.md)。stdin から CR+LF までを 1 行として
@@ -307,20 +310,17 @@ int main(int argc, char** argv) {
             uint8_t b;
             switch (read_stdin_byte(&b)) {
                 case RxState::Byte:
-                    if (rx_linebuf_len < 34)
+                    if (rx_linebuf_len < 35)
                         rx_linebuf[rx_linebuf_len++] = static_cast<char>(b);
-                    // CR+LF を行終端として検出
-                    if (rx_linebuf_len >= 2 &&
-                        rx_linebuf[rx_linebuf_len - 2] == '\r' &&
-                        rx_linebuf[rx_linebuf_len - 1] == '\n') {
-                        // 4 bytes ("XX\r\n") のコマンドをインターセプト
-                        if (rx_linebuf_len == 4 &&
-                            rx_linebuf[0] == 'B' && rx_linebuf[1] == 'M') {
+                    // LF で行確定 (LF 単独 / CR+LF どちらも)
+                    if (b == '\n') {
+                        const char c0 = rx_linebuf[0];
+                        const char c1 = (rx_linebuf_len >= 2) ? rx_linebuf[1] : 0;
+                        if (c0 == 'B' && c1 == 'M') {
                             bench_report(stdout, false);
                             rx_linebuf_len = 0;
                             last_was_crlf  = true;
-                        } else if (rx_linebuf_len == 4 &&
-                                   rx_linebuf[0] == 'I' && rx_linebuf[1] == 'D') {
+                        } else if (c0 == 'I' && c1 == 'D') {
                             id_report(stdout);
                             rx_linebuf_len = 0;
                             last_was_crlf  = true;
@@ -368,6 +368,7 @@ int main(int argc, char** argv) {
                 awaiting_response   = true;
                 seen_tx_in_response = false;
                 tx_quiet            = 0;
+                cycles_since_lf     = 0;
             }
             if (rx_replay_pos >= rx_linebuf_len) {
                 rx_line_ready  = false;
@@ -402,11 +403,14 @@ int main(int argc, char** argv) {
         if (!dut->tx_valid) {
             ++tx_quiet;
             // 応答が落ち着いたら次の行を流せる状態に戻す。
-            // tx_valid が 1 度も立たない応答 (= 空応答) は無いので、
-            // seen_tx_in_response が前提条件。
-            if (awaiting_response && seen_tx_in_response &&
-                tx_quiet >= kSettleCycles) {
-                awaiting_response = false;
+            //   通常応答: tx_valid が 1 度立ってから kSettleCycles 静まる
+            //   無応答 (EB/EW/ED 等): LF 以後 kMaxSilentCycles で諦める
+            if (awaiting_response) {
+                ++cycles_since_lf;
+                if ((seen_tx_in_response && tx_quiet >= kSettleCycles) ||
+                    (!seen_tx_in_response && cycles_since_lf >= kMaxSilentCycles)) {
+                    awaiting_response = false;
+                }
             }
             if (stdin_eof && eof_lf_sent && !awaiting_response) {
                 if (++quiescent >= kQuiescentCycles) break;

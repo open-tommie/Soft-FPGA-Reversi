@@ -137,10 +137,27 @@ int main() {
     bool rx_line_ready  = false;
     int  rx_replay_pos  = 0;
 
+    // RX バックプレッシャ:
+    //   USB-CDC は 115200 baud より速くバイトを届ける可能性があるため、DUT が
+    //   応答送信中 (S_TX) に次の行を流し込むと proto.v は rx_valid を取りこぼす。
+    //   LF を流したら awaiting_response=true にし、以下のいずれかで復帰:
+    //     - tx_valid が 1 度立ってから kSettleCycles 連続で 0    (通常応答)
+    //     - LF 以後 kMaxSilentCycles 経過しても TX が無い        (EB/EW/ED 等)
+    //   Phase A (USB-CDC → rx_linebuf) は次の行を先読みできるので継続。
+    bool awaiting_response   = false;
+    bool seen_tx_in_response = false;
+    int  tx_quiet            = 0;
+    int  cycles_since_lf     = 0;
+    constexpr int kSettleCycles    = 4;
+    constexpr int kMaxSilentCycles = 16;
+
     bool led = false;
     uint32_t led_div = 0;
     while (true) {
-        // Phase A: UART → rx_linebuf（ライン未完成のときだけ読む）
+        const bool dut_ready = !awaiting_response;
+
+        // Phase A: UART → rx_linebuf（ライン未完成のときだけ読む。バックプレッシャ
+        // 下でも次行先読みは継続して USB-CDC の取りこぼしを防ぐ）
         if (!rx_line_ready) {
             const int c = getchar_timeout_us(0);
             if (c >= 0) {
@@ -164,10 +181,17 @@ int main() {
             }
         }
 
-        // Phase B: rx_linebuf → DUT（1 byte/cycle）
-        if (rx_line_ready && rx_replay_pos < rx_linebuf_len) {
-            dut->rx_byte  = static_cast<uint8_t>(rx_linebuf[rx_replay_pos++]);
+        // Phase B: rx_linebuf → DUT（1 byte/cycle、DUT 準備済みのときのみ）
+        if (rx_line_ready && rx_replay_pos < rx_linebuf_len && dut_ready) {
+            const uint8_t b = static_cast<uint8_t>(rx_linebuf[rx_replay_pos++]);
+            dut->rx_byte  = b;
             dut->rx_valid = 1;
+            if (b == '\n') {
+                awaiting_response   = true;
+                seen_tx_in_response = false;
+                tx_quiet            = 0;
+                cycles_since_lf     = 0;
+            }
             if (rx_replay_pos >= rx_linebuf_len) {
                 rx_line_ready  = false;
                 rx_linebuf_len = 0;
@@ -182,6 +206,17 @@ int main() {
         // TX: DUT が 1 byte 出していれば stdout に流す
         if (dut->tx_valid) {
             putchar_raw(static_cast<int>(dut->tx_byte));
+            seen_tx_in_response = true;
+            tx_quiet            = 0;
+        } else {
+            ++tx_quiet;
+        }
+        if (awaiting_response) {
+            ++cycles_since_lf;
+            if ((seen_tx_in_response && tx_quiet >= kSettleCycles) ||
+                (!seen_tx_in_response && cycles_since_lf >= kMaxSilentCycles)) {
+                awaiting_response = false;
+            }
         }
 
         if ((++led_div & 0xFFFF) == 0) {
