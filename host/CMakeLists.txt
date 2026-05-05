@@ -38,31 +38,27 @@ endforeach()
 set(RTL_DIR ${CMAKE_SOURCE_DIR}/../rtl)
 set(VERILATED_DIR ${CMAKE_BINARY_DIR}/verilated)
 
-# firmware 版と enumerable な出力ファイル名を揃えるため --threads は付けない。
-set(VERILATED_SOURCES
-    ${VERILATED_DIR}/Vothello_top.cpp
-    ${VERILATED_DIR}/Vothello_top__Syms__Slow.cpp
-    ${VERILATED_DIR}/Vothello_top___024root__0.cpp
-    ${VERILATED_DIR}/Vothello_top___024root__0__Slow.cpp
-    ${VERILATED_DIR}/Vothello_top___024root__Slow.cpp
-)
-
-set(VERILATED_STAMP ${VERILATED_DIR}/.stamp)
+# RTL ファイルが変わると CONFIGURE_DEPENDS で cmake が自動再実行され、
+# Verilator も再実行される。出力ファイル数が可変 (ConstPool 等) なので
+# execute_process + file(GLOB) で対応する (firmware 版と同じ方式)。
 file(GLOB RTL_SOURCES CONFIGURE_DEPENDS "${RTL_DIR}/*.v" "${RTL_DIR}/*.sv")
 
-add_custom_command(
-    OUTPUT ${VERILATED_STAMP} ${VERILATED_SOURCES}
+execute_process(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${VERILATED_DIR}
+)
+execute_process(
     COMMAND ${VERILATOR_BIN} --cc --no-trace --no-timing
             -DSIMULATION
             -y ${RTL_DIR}
             --Mdir ${VERILATED_DIR}
             ${RTL_DIR}/othello_top.v
-    COMMAND ${CMAKE_COMMAND} -E touch ${VERILATED_STAMP}
-    DEPENDS ${RTL_SOURCES}
-    COMMENT "Verilating othello_top (host build)"
-    VERBATIM
+    RESULT_VARIABLE _vl_result
 )
+if(NOT _vl_result EQUAL 0)
+    message(FATAL_ERROR "Verilator failed for reversi_host")
+endif()
+
+file(GLOB VERILATED_SOURCES CONFIGURE_DEPENDS "${VERILATED_DIR}/Vothello_top*.cpp")
 
 add_executable(reversi_host
     main.cpp

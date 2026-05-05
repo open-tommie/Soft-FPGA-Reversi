@@ -1,7 +1,7 @@
 """rtl/proto.v の cocotb ユニットテスト。
 
-UART テキストプロトコル骨格 (Bootstrap step 3 の Verilog 化版) を
-バイト粒度で駆動し、PI/VE/ER02 の応答を検証する。HIL ではなく純粋に
+UART テキストプロトコル骨格 (RUP v0.2 準拠) をバイト粒度で駆動し、
++PI / +VE02 / -01 の応答を検証する。HIL ではなく純粋に
 Verilator + cocotb で完結するので秒で回る。
 """
 from __future__ import annotations
@@ -38,6 +38,12 @@ async def send_line(dut, line: bytes) -> None:
         await send_byte(dut, b)
 
 
+async def settle(dut, cycles: int = 5) -> None:
+    """応答なし通知コマンド送信後、DUT が状態を確定させるのを待つ。"""
+    for _ in range(cycles):
+        await RisingEdge(dut.clk)
+
+
 async def collect_response(dut, max_ticks: int = 100) -> bytes:
     """tx_valid を観測しながら 1 行 (CR+LF の LF まで) 受信して返す。"""
     out = bytearray()
@@ -55,59 +61,59 @@ async def collect_response(dut, max_ticks: int = 100) -> bytes:
 
 @cocotb.test()
 async def pi_returns_po(dut) -> None:
-    """PI\\r\\n → PO\\r\\n"""
+    """PI\\r\\n → +PI\\r\\n"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"PI\r\n")
     resp = await collect_response(dut)
-    assert resp == b"PO\r\n", f"期待 b'PO\\r\\n' / 実際 {resp!r}"
+    assert resp == b"+PI\r\n", f"期待 b'+PI\\r\\n' / 実際 {resp!r}"
 
 
 @cocotb.test()
 async def ve_returns_version(dut) -> None:
-    """VE\\r\\n → VE01SW-FPGA-pico2-reversi-01\\r\\n"""
+    """VE\\r\\n → +VE02SW-FPGA-pico2-reversi-01\\r\\n"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"VE\r\n")
     resp = await collect_response(dut)
-    assert resp == b"VE01SW-FPGA-pico2-reversi-01\r\n", f"期待 VE01SW-FPGA-pico2-reversi-01 / 実際 {resp!r}"
+    assert resp == b"+VE02SW-FPGA-pico2-reversi-01\r\n", f"期待 +VE02SW-FPGA-pico2-reversi-01 / 実際 {resp!r}"
 
 
 @cocotb.test()
-async def unknown_returns_er02(dut) -> None:
-    """XX\\r\\n → ER02 unknown\\r\\n"""
+async def unknown_returns_error(dut) -> None:
+    """XX\\r\\n → -01 unknown\\r\\n"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"XX\r\n")
     resp = await collect_response(dut)
-    assert resp.startswith(b"ER02"), f"ER02 を期待: {resp!r}"
+    assert resp.startswith(b"-01"), f"-01 を期待: {resp!r}"
     assert b"unknown" in resp, f"unknown を含むこと: {resp!r}"
 
 
 @cocotb.test()
-async def known_unimplemented_returns_er02(dut) -> None:
-    """MO\\r\\n も骨格段階では ER02 で返す (PI/VE 以外は全部一律)。"""
+async def mo_wrong_len_returns_error(dut) -> None:
+    """MO\\r\\n (座標なし、buf_len=2) は -01 で返す。"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"MO\r\n")
     resp = await collect_response(dut)
-    assert resp.startswith(b"ER02"), f"ER02 を期待: {resp!r}"
+    assert resp.startswith(b"-01"), f"-01 を期待: {resp!r}"
 
 
 @cocotb.test()
 async def repeated_pi(dut) -> None:
-    """PI を 3 連続で投げて PO が 3 回返る (フレーミングが崩れない)。"""
+    """PI を 3 連続で投げて +PI が 3 回返る (フレーミングが崩れない)。"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     for _ in range(3):
         await send_line(dut, b"PI\r\n")
         resp = await collect_response(dut)
-        assert resp == b"PO\r\n", f"PO 期待 / 実際 {resp!r}"
+        assert resp == b"+PI\r\n", f"+PI 期待 / 実際 {resp!r}"
 
 
 # ===== Step 5d-2: SB/SW で内部 game_state が初期化される =====
-# 応答は依然 ER02 のままだが、game_state が SB/SW を受けて状態遷移する
-# ことを階層アクセス (dut.u_game_state.*) で確認する。
+# game_state が SB/SW を受けて状態遷移することを
+# 階層アクセス (dut.u_game_state.*) で確認する。
 
 PHASE_IDLE = 0
 PHASE_MY_TURN = 1
@@ -150,11 +156,11 @@ async def sb_initializes_black_then_picks_move(dut) -> None:
 
 @cocotb.test()
 async def sw_initializes_white_wait_opp(dut) -> None:
-    """SW を受けると my_side=White, phase=WAIT_OPP, 初期盤面。"""
+    """SW を受けると my_side=White, phase=WAIT_OPP, 初期盤面。SW は応答なし (通知)。"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SW\r\n")
-    await collect_response(dut)
+    await settle(dut)  # SW は応答なし (RUP v0.2 通知)
 
     assert int(dut.u_game_state.my_side.value) == 1, "SW → White"
     assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
@@ -178,7 +184,7 @@ async def pi_does_not_touch_game_state(dut) -> None:
 
     await send_line(dut, b"PI\r\n")
     resp = await collect_response(dut)
-    assert resp == b"PO\r\n"
+    assert resp == b"+PI\r\n"
 
     assert int(dut.u_game_state.phase.value) == phase_before
     assert int(dut.u_game_state.my_side.value) == side_before
@@ -247,7 +253,7 @@ async def mo_adds_opp_black_after_sw(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SW\r\n")
-    await collect_response(dut)
+    await settle(dut)  # SW は応答なし (RUP v0.2 通知)
     assert int(dut.u_game_state.my_side.value) == 1
     assert int(dut.u_game_state.black.value) == INIT_BLACK
     assert int(dut.u_game_state.white.value) == INIT_WHITE
@@ -313,7 +319,7 @@ async def sw_does_not_pick_own_move(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SW\r\n")
-    await collect_response(dut)
+    await settle(dut)  # SW は応答なし (RUP v0.2 通知)
 
     # 盤面は変わっていない (相手の MO 待ち)
     assert int(dut.u_game_state.black.value) == INIT_BLACK
@@ -346,9 +352,7 @@ async def mo_responds_with_mo(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SW\r\n")
-    resp_sw = await collect_response(dut)
-    # SW 自身は (現状) ER02 応答だが、内部状態は my=White で確定
-    assert resp_sw.startswith(b"ER02") or resp_sw == b"\r\n"
+    await settle(dut)  # SW は応答なし (RUP v0.2 通知)
 
     await send_line(dut, b"MOd3\r\n")
     resp = await collect_response(dut)
@@ -371,7 +375,7 @@ async def mo_responds_with_mo(dut) -> None:
 
 @cocotb.test()
 async def pi_still_returns_po_after_sb(dut) -> None:
-    """SB で MO 応答を出した後でも PI は PO を返す (TX モード切替が壊れてない)。"""
+    """SB で MO 応答を出した後でも PI は +PI を返す (TX モード切替が壊れてない)。"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SB\r\n")
@@ -380,7 +384,7 @@ async def pi_still_returns_po_after_sb(dut) -> None:
     await collect_response(dut)
     await send_line(dut, b"PI\r\n")
     resp = await collect_response(dut)
-    assert resp == b"PO\r\n"
+    assert resp == b"+PI\r\n"
 
 
 # ===== Step 5d-3d: SB / MO 後に "MO<xy>\r\n" + "BS<board>\r\n" を連結送信 =====
@@ -431,7 +435,7 @@ async def mo_responds_with_mo_then_bs(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SW\r\n")
-    await collect_response(dut)   # SW は ER02 のみ (BS は付かない)
+    await settle(dut)  # SW は応答なし (RUP v0.2 通知)
 
     await send_line(dut, b"MOd3\r\n")
     mo_line = await collect_response(dut)
@@ -501,7 +505,7 @@ async def step6_self_play_matches_golden(dut) -> None:
         opp_move = opp_legal[0]
         opp_coord = _fmt_coord(*opp_move).encode()
 
-        # 送信前に my の合法手有無を予測 (proto が MO+BS を返すか ER02 だけか)
+        # 送信前に my の合法手有無を予測 (proto が MO+BS を返すか -01 だけか)
         next_board = [row[:] for row in board]
         _apply_move(next_board, opp_move[0], opp_move[1], _WHITE)
         my_legal_after = _legal_moves(next_board, _BLACK)
@@ -536,19 +540,21 @@ async def step6_self_play_matches_golden(dut) -> None:
 
 
 @cocotb.test()
-async def sw_no_bs_appended(dut) -> None:
-    """SW 直後の応答は ER02 のみで BS が続かない (5d-3d の chain は MO に限る)。"""
+async def sw_no_response_no_bs(dut) -> None:
+    """SW は応答なし (RUP v0.2 通知)。BS が続かないことも確認。"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SW\r\n")
-    line1 = await collect_response(dut)
-    assert line1.startswith(b"ER02")
+    # 20 cycle 以内に TX が来ないことを確認
+    for _ in range(20):
+        await RisingEdge(dut.clk)
+        assert not dut.tx_valid.value, "SW 後に余計な TX が出た"
 
-    # 続けて何も来ないことを確認 (PI を投げて PO がそのまま返るか)
+    # 続けて PI → +PI が正常に動く
     await send_line(dut, b"PI\r\n")
     line2 = await collect_response(dut)
-    assert line2 == b"PO\r\n", (
-        f"SW の後ろに余計な BS があると PO が遅れて見える。実際: {line2!r}"
+    assert line2 == b"+PI\r\n", (
+        f"SW の後ろに余計な TX があると +PI が遅れて見える。実際: {line2!r}"
     )
 
 
@@ -564,7 +570,7 @@ async def mo_then_pick_own_move(dut) -> None:
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"SW\r\n")
-    await collect_response(dut)
+    await settle(dut)  # SW は応答なし (RUP v0.2 通知)
 
     # 相手 (Black) の MOd3 を投入
     await send_line(dut, b"MOd3\r\n")
@@ -659,3 +665,20 @@ async def end_then_sb_restarts_game(dut) -> None:
     assert mo_line == b"MOd3\r\n", f"再開後の初手: {mo_line!r}"
     assert int(dut.u_game_state.black.value) != 0
     assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
+
+
+# ===== RUP v0.2: 空行サイレント破棄 =====
+
+
+@cocotb.test()
+async def empty_line_silently_discarded(dut) -> None:
+    """空行 (\\r\\n のみ) を送っても応答が来ず、次の PI は +PI を返す (RUP v0.2 §5.1)。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"\r\n")
+    for _ in range(20):
+        await RisingEdge(dut.clk)
+        assert not dut.tx_valid.value, "空行に対して応答が返った"
+    await send_line(dut, b"PI\r\n")
+    resp = await collect_response(dut)
+    assert resp == b"+PI\r\n", f"空行後の PI: {resp!r}"

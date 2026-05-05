@@ -13,4 +13,16 @@ USER_GID="$(id -g)"
 export USER_UID USER_GID
 
 docker compose -f docker/compose.yml run --rm firmware
+
+echo ""
+for UF2 in firmware/build/firmware_lsb.uf2 firmware/build/firmware_max_gain.uf2; do
+    UF2_SIZE="$(du -h "${UF2}" 2>/dev/null | cut -f1 || echo "?")"
+    echo "ビルド完了: ${UF2} (${UF2_SIZE})"
+done
+
 scripts/flash.sh
+
+echo ""
+echo "=========================================="
+echo "  ビルド＆書き込み 完了"
+echo "=========================================="

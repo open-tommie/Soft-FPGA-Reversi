@@ -24,75 +24,10 @@ pico_sdk_init()
 set(VERILATOR_BIN /usr/local/bin/verilator)
 set(VERILATOR_INC /usr/local/share/verilator/include)
 set(RTL_DIR ${CMAKE_SOURCE_DIR}/../rtl)
-set(VERILATED_DIR ${CMAKE_BINARY_DIR}/verilated)
 set(VERILATOR_RUNTIME ${CMAKE_SOURCE_DIR}/src/verilator-runtime/verilated.cpp)
 
-# verilator が --threads 無しで生成する .cpp ファイル群。--threads 1 を渡すと
-# ファイル名にハッシュ (___024root__DepSet_h<hash>__0.cpp) が入って enumerable
-# でなくなるので、threads は省略 (model のデフォルトは threads=1 と同等)。
-set(VERILATED_SOURCES
-    ${VERILATED_DIR}/Vothello_top.cpp
-    ${VERILATED_DIR}/Vothello_top__Syms__Slow.cpp
-    ${VERILATED_DIR}/Vothello_top___024root__0.cpp
-    ${VERILATED_DIR}/Vothello_top___024root__0__Slow.cpp
-    ${VERILATED_DIR}/Vothello_top___024root__Slow.cpp
-)
-
-# Verilog ファイルが変わったら自動で再 verilation。
-# stamp ファイルを OUTPUT にすることで、verilator 出力複数を 1 つの依存関係に集約。
-set(VERILATED_STAMP ${VERILATED_DIR}/.stamp)
 file(GLOB RTL_SOURCES CONFIGURE_DEPENDS "${RTL_DIR}/*.v" "${RTL_DIR}/*.sv")
 
-add_custom_command(
-    OUTPUT ${VERILATED_STAMP} ${VERILATED_SOURCES}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${VERILATED_DIR}
-    COMMAND ${VERILATOR_BIN} --cc --no-trace --no-timing
-            -y ${RTL_DIR}
-            --Mdir ${VERILATED_DIR}
-            ${RTL_DIR}/othello_top.v
-    COMMAND ${CMAKE_COMMAND} -E touch ${VERILATED_STAMP}
-    DEPENDS ${RTL_SOURCES}
-    COMMENT "Verilating othello_top (RTL changed)"
-    VERBATIM
-)
-
-add_executable(firmware
-    src/main.cpp
-    src/cxx_minimal.cpp
-    ${VERILATED_SOURCES}
-    ${VERILATOR_RUNTIME}
-)
-
-# 注: LTO (INTERPROCEDURAL_OPTIMIZATION) は Pico SDK の
-# `-Wl,--wrap=printf/puts/putchar` と衝突して link エラーになる
-# (LTO で printf 呼び出しがインライン化され --wrap が効かない)。
-# 採用しない。回避には全 printf 系 TU を -fno-lto にする必要があり
-# 得られる効果に対して保守コストが大きい。
-
-target_include_directories(firmware PRIVATE src)
-# Verilator 由来のヘッダは 3rd-party 扱い (SYSTEM) にして警告対象から外す。
-# これで main.cpp 等が Vothello_top.h 経由で verilated_funcs.h を引いても
-# sign-compare 等の警告ノイズが出ない。
-target_include_directories(firmware SYSTEM PRIVATE
-    ${VERILATED_DIR}
-    ${VERILATOR_INC}
-    ${VERILATOR_INC}/vltstd
-)
-
-# Verilator 由来のソースには:
-# - -include stub_mutex.h で std::mutex など組込み向け stub を差し込む
-# - -w で 3rd-party 生成コードの警告 (sign-compare 等) を抑止
-set_source_files_properties(
-    ${VERILATED_SOURCES} ${VERILATOR_RUNTIME}
-    PROPERTIES COMPILE_FLAGS "-include ${CMAKE_SOURCE_DIR}/src/stub_mutex.h -w"
-)
-
-target_compile_options(firmware PRIVATE
-    -Os
-    -fno-unwind-tables
-    -Wall
-    -Wextra
-)
 # --- ビルドメタデータ ---
 execute_process(
     COMMAND git rev-parse --short HEAD
@@ -112,22 +47,83 @@ if(NOT GIT_HASH)
     set(GIT_HASH "unknown")
 endif()
 
-target_compile_definitions(firmware PRIVATE
-    NDEBUG
-    # 当方は %lu / %s / %d しか使わないので float / 指数は要らない。
-    # _etoa / _ftoa / _strtod_l / _dtoa_r 等の引きずりを防ぐ (~3-5 KiB)。
-    PICO_PRINTF_SUPPORT_FLOAT=0
-    PICO_PRINTF_SUPPORT_EXPONENTIAL=0
-    GIT_HASH="${GIT_HASH}"
-    PICO_PLATFORM_STR="${PICO_PLATFORM}"
-)
+# --- ファームウェアターゲット生成関数 ---
+# 引数:
+#   TARGET_NAME       実行ファイル名 (firmware_lsb / firmware_max_gain)
+#   PICK_STRATEGY_VAL Verilog パラメータ値 (0=LSB, 1=MAX_GAIN)
+#
+# 注: LTO は Pico SDK の --wrap=printf/puts/putchar と衝突して link エラーになる
+# (LTO で printf がインライン化され --wrap が効かない) ため採用しない。
+function(add_reversi_firmware TARGET_NAME PICK_STRATEGY_VAL)
+    set(VERILATED_DIR ${CMAKE_BINARY_DIR}/verilated_${TARGET_NAME})
 
-target_link_libraries(firmware
-    pico_stdlib
-    hardware_clocks
-)
+    # configure 時に Verilator を実行。RTL ファイルが変わると CONFIGURE_DEPENDS で
+    # cmake が自動再実行されるため、ビルド時の custom_command と同等の再 verilation が得られる。
+    # pick_max_gain は 64 flip_calc インスタンスで出力ファイル数が可変になるため
+    # file(GLOB) で列挙する方式を採用。
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${VERILATED_DIR}
+    )
+    execute_process(
+        COMMAND ${VERILATOR_BIN} --cc --no-trace --no-timing
+                -y ${RTL_DIR}
+                --Mdir ${VERILATED_DIR}
+                -GPICK_STRATEGY=${PICK_STRATEGY_VAL}
+                ${RTL_DIR}/othello_top.v
+        RESULT_VARIABLE _vl_result
+    )
+    if(NOT _vl_result EQUAL 0)
+        message(FATAL_ERROR "Verilator failed for ${TARGET_NAME} (PICK_STRATEGY=${PICK_STRATEGY_VAL})")
+    endif()
 
-pico_enable_stdio_usb(firmware 1)
-pico_enable_stdio_uart(firmware 1)
+    file(GLOB VERILATED_SOURCES CONFIGURE_DEPENDS "${VERILATED_DIR}/Vothello_top*.cpp")
 
-pico_add_extra_outputs(firmware)
+    add_executable(${TARGET_NAME}
+        src/main.cpp
+        src/cxx_minimal.cpp
+        ${VERILATED_SOURCES}
+        ${VERILATOR_RUNTIME}
+    )
+
+    target_include_directories(${TARGET_NAME} PRIVATE src)
+    # Verilator 由来のヘッダは 3rd-party 扱い (SYSTEM) にして警告対象から外す。
+    target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
+        ${VERILATED_DIR}
+        ${VERILATOR_INC}
+        ${VERILATOR_INC}/vltstd
+    )
+
+    # Verilator 由来のソース: stub_mutex.h を差し込み、警告を抑止。
+    set_source_files_properties(
+        ${VERILATED_SOURCES} ${VERILATOR_RUNTIME}
+        PROPERTIES COMPILE_FLAGS "-include ${CMAKE_SOURCE_DIR}/src/stub_mutex.h -w"
+    )
+
+    target_compile_options(${TARGET_NAME} PRIVATE
+        -Os
+        -fno-unwind-tables
+        -Wall
+        -Wextra
+    )
+
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        NDEBUG
+        PICO_PRINTF_SUPPORT_FLOAT=0
+        PICO_PRINTF_SUPPORT_EXPONENTIAL=0
+        GIT_HASH="${GIT_HASH}"
+        PICO_PLATFORM_STR="${PICO_PLATFORM}"
+    )
+
+    target_link_libraries(${TARGET_NAME}
+        pico_stdlib
+        hardware_clocks
+    )
+
+    pico_enable_stdio_usb(${TARGET_NAME} 1)
+    pico_enable_stdio_uart(${TARGET_NAME} 1)
+    pico_add_extra_outputs(${TARGET_NAME})
+endfunction()
+
+# --- ターゲット定義 ---
+add_reversi_firmware(firmware_lsb      0)  # 行優先最初の合法手
+add_reversi_firmware(firmware_max_gain 1)  # 反転駒数最大の合法手

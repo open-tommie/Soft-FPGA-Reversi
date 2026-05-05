@@ -12,7 +12,11 @@
 
 `default_nettype none
 
-module othello_top (
+module othello_top #(
+    // 0 = pick_lsb (行優先最初の合法手)
+    // 1 = pick_max_gain (反転駒数最大の合法手)
+    parameter PICK_STRATEGY = 0
+) (
     input  wire        clk,
     input  wire        rst,
     // RX byte stream (firmware: stdin → 1-cycle pulse)
@@ -23,7 +27,7 @@ module othello_top (
     output wire [7:0]  tx_byte
 );
 
-    proto u_proto (
+    proto #(.PICK_STRATEGY(PICK_STRATEGY)) u_proto (
         .clk      (clk),
         .rst      (rst),
         .rx_valid (rx_valid),

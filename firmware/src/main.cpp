@@ -58,7 +58,7 @@ static void date_iso(char out[11]) {
     out[10]='\0';
 }
 
-// ID コマンド応答: デバイス情報
+// XI コマンド応答: デバイス情報 (RUP v0.2 拡張 X* ネームスペース)
 
 void id_report() {
     constexpr uint32_t kFlashKb = PICO_FLASH_SIZE_BYTES / 1024u;
@@ -76,7 +76,7 @@ void id_report() {
     const uint32_t chip_rev = (sysinfo_hw->chip_id >> 28u) & 0xFu;
     char bld[11];
     date_iso(bld);
-    printf("ID pf=" PICO_PLATFORM_STR
+    printf("+XI pf=" PICO_PLATFORM_STR
            " chip=B%u flash=%uKB prog=%uKB(%u%%) ram=%uKB bss=%uKB(%u%%)"
            " clk=%uMHz git=%s bld=%s\r\n",
            static_cast<unsigned>(chip_rev),
@@ -89,18 +89,18 @@ void id_report() {
            bld);
 }
 
-// BM コマンド応答: "BM clk=X.XXXMHz tick=XXXns\n"
+// XB コマンド応答: "+XB clk=X.XXXMHz tick=XXXns\r\n" (RUP v0.2 拡張)
 // 浮動小数を避け整数演算のみで出力する
 void bench_report_protocol() {
     if (s_tick_count == 0) {
-        printf("BM no-data\r\n");
+        printf("+XB no-data\r\n");
         return;
     }
     // ns_per_tick = us_total * 1000 / ticks
     const uint32_t ns_per_tick = (s_eval_us * 1000u) / s_tick_count;
     // clk_khz = 1_000_000 / ns_per_tick
     const uint32_t clk_khz = (ns_per_tick > 0u) ? (1000000u / ns_per_tick) : 0u;
-    printf("BM clk=%lu.%03luMHz tick=%luns\r\n",
+    printf("+XB clk=%lu.%03luMHz tick=%luns\r\n",
            (unsigned long)(clk_khz / 1000u),
            (unsigned long)(clk_khz % 1000u),
            (unsigned long)ns_per_tick);
@@ -129,9 +129,9 @@ int main() {
     auto* const dut = new Vothello_top{ctx, "othello_top"};
     apply_reset(dut);
 
-    // BM/ID コマンドインターセプト用ラインバッファ。
+    // XB/XI コマンドインターセプト用ラインバッファ (RUP v0.2 X* 拡張)。
     // 行終端は LF (CR+LF / LF 単独どちらも受け付ける)。
-    // "BM" / "ID" は DUT に渡さず C++ 側で応答する。
+    // "XB" / "XI" は DUT に渡さず C++ 側で応答する。
     char rx_linebuf[36] = {};
     int  rx_linebuf_len = 0;
     bool rx_line_ready  = false;
@@ -167,10 +167,10 @@ int main() {
                     // LF で行確定。先頭 2 文字でコマンド判定（CR は無視）
                     const char c0 = rx_linebuf[0];
                     const char c1 = (rx_linebuf_len >= 2) ? rx_linebuf[1] : 0;
-                    if (c0 == 'B' && c1 == 'M') {
+                    if (c0 == 'X' && c1 == 'B') {
                         bench_report_protocol();
                         rx_linebuf_len = 0;
-                    } else if (c0 == 'I' && c1 == 'D') {
+                    } else if (c0 == 'X' && c1 == 'I') {
                         id_report();
                         rx_linebuf_len = 0;
                     } else {

@@ -5,10 +5,11 @@
 //
 // 速度ではなく「Verilog で書いて Pico 2 上で動く」ことが目的。
 //
-// 仕様 (etc/protocol.md のサブセット、Bootstrap step 3 相当):
-//   - PI         → "PO\r\n"
-//   - VE         → "VE01reversi-fw\r\n"
-//   - その他全部 → "ER02 unknown\r\n"
+// 仕様 (RUP v0.2 サブセット):
+//   - PI         → "+PI\r\n"
+//   - VE         → "+VE02<name>\r\n"
+//   - その他全部 → "-01 unknown\r\n"
+//   - 空行 (CR+LF のみ) → サイレント破棄 (応答なし)
 //
 // インターフェース:
 //   - rx_valid を 1 cycle pulse して rx_byte をラッチさせる。
@@ -19,7 +20,11 @@
 
 `default_nettype none
 
-module proto (
+module proto #(
+    // 0 = pick_lsb (行優先最初の合法手)
+    // 1 = pick_max_gain (反転駒数最大の合法手)
+    parameter PICK_STRATEGY = 0
+) (
     input  wire        clk,
     input  wire        rst,
     // RX byte stream (1-cycle pulse pattern)
@@ -78,12 +83,12 @@ module proto (
     // ----- 連結 ROM -----
     // 各応答文字列。★ 変えるときは *_STR と *_STR_CHARS の 2 箇所だけ更新する ★
     // LF (\n) は ROM が自動付加するため文字列には含めない。
-    localparam        PO_STR       = "PO";
-    localparam integer PO_STR_CHARS = 2;
-    localparam        VE_STR       = "VE01SW-FPGA-pico2-reversi-01";
-    localparam integer VE_STR_CHARS = 28;
-    localparam        ER_STR       = "ER02 unknown";
-    localparam integer ER_STR_CHARS = 12;
+    localparam        PO_STR       = "+PI";
+    localparam integer PO_STR_CHARS = 3;
+    localparam        VE_STR       = "+VE02SW-FPGA-pico2-reversi-01";
+    localparam integer VE_STR_CHARS = 29;
+    localparam        ER_STR       = "-01 unknown";
+    localparam integer ER_STR_CHARS = 11;
     localparam        PA_STR       = "PA";
     localparam integer PA_STR_CHARS = 2;
 
@@ -231,16 +236,27 @@ module proto (
         .side(gs_my_side), .legal(lb_legal)
     );
 
-    // pick_lsb: legal の中で最下位 set bit を選ぶ
+    // ピッカー: PICK_STRATEGY で差し替え
+    wire [63:0] ps_own = gs_my_side ? gs_white : gs_black;
+    wire [63:0] ps_opp = gs_my_side ? gs_black : gs_white;
     /* verilator lint_off UNUSEDSIGNAL */
     wire        ps_valid;
     wire [5:0]  ps_index;
     wire [63:0] ps_one_hot;
     /* verilator lint_on UNUSEDSIGNAL */
-    pick_lsb u_pick_lsb (
-        .in_bits(lb_legal),
-        .valid(ps_valid), .index(ps_index), .one_hot(ps_one_hot)
-    );
+    generate
+        if (PICK_STRATEGY == 1) begin : gen_pick_max_gain
+            pick_max_gain u_pick (
+                .in_bits(lb_legal), .own(ps_own), .opp(ps_opp),
+                .valid(ps_valid), .index(ps_index), .one_hot(ps_one_hot)
+            );
+        end else begin : gen_pick_lsb
+            pick_lsb u_pick (
+                .in_bits(lb_legal),
+                .valid(ps_valid), .index(ps_index), .one_hot(ps_one_hot)
+            );
+        end
+    endgenerate
 
     // coord: parse 用は MO 受信時に buf_mem の [2..3] を渡す。
     //        format 用は pick_lsb の index を渡し、自分の手の文字列を得る。
@@ -335,67 +351,73 @@ module proto (
                     end
                 end
                 S_DISPATCH: begin
-                    // TX モードと index/end をセット (デフォルトは ROM 経路)
-                    tx_mode <= TX_MODE_ROM;
-                    if (is_pi) begin
-                        tx_idx <= {1'b0, ROM_PO_OFF};
-                        tx_end <= {1'b0, ROM_PO_OFF + ROM_PO_LEN};
-                    end else if (is_ve) begin
-                        tx_idx <= {1'b0, ROM_VE_OFF};
-                        tx_end <= {1'b0, ROM_VE_OFF + ROM_VE_LEN};
-                    end else begin
-                        tx_idx <= {1'b0, ROM_ER_OFF};
-                        tx_end <= {1'b0, ROM_ER_OFF + ROM_ER_LEN};
-                    end
-                    `ifdef SIMULATION
-                    if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_DISPATCH is={pi=%b ve=%b sb=%b sw=%b mo=%b} cd_valid=%b parse_bit=%0d flip=%016h tx_mode=%0d tx=%0d/%0d",
-                        `__LINE__, dbg_cycle,
-                        is_pi, is_ve, is_sb, is_sw, is_mo,
-                        cd_parse_valid, cd_parse_bit, fc_flip,
-                        tx_mode, tx_idx, tx_end);
-                    `endif
-
-                    // SB/SW を受けたら game_state を初期化する。
-                    // gs_cmd_init は 1 cycle のみ立てる (default 0 で次 cycle 戻る)
-                    if (is_sb) begin
-                        gs_cmd_init  <= 1'b1;
-                        gs_init_side <= 1'b0;   // Black
-                    end else if (is_sw) begin
-                        gs_cmd_init  <= 1'b1;
-                        gs_init_side <= 1'b1;   // White
-                    end
-                    // MO<xy> を受けたら相手の駒を盤面に置く。
-                    // fc_flip で挟まれた自分の駒を相手色に反転する。
-                    //   - my_side=0 (Black): opp=White
-                    //       white += move + flip、black -= flip
-                    //   - my_side=1 (White): opp=Black
-                    //       black += move + flip、white -= flip
-                    //   - 不正座標 (cd_parse_valid=0) の場合は何もしない
-                    if (is_mo && cd_parse_valid) begin
-                        gs_cmd_set_board <= 1'b1;
-                        if (gs_my_side == 1'b0) begin
-                            gs_in_white <= gs_white | (64'd1 << cd_parse_bit) | fc_flip;
-                            gs_in_black <= gs_black & ~fc_flip;
-                        end else begin
-                            gs_in_black <= gs_black | (64'd1 << cd_parse_bit) | fc_flip;
-                            gs_in_white <= gs_white & ~fc_flip;
-                        end
-                    end
-                    // EB/EW/ED: 終局 → IDLE 復帰、応答なし
-                    if (is_eb || is_ew || is_ed) begin
-                        gs_cmd_set_phase <= 1'b1;
-                        gs_in_phase      <= PHASE_IDLE;
-                    end
                     buf_len <= 0;
-                    // 自分の手番開始 (SB / 相手 MO 受信 / 相手 PA 受信) なら
-                    // 1 cycle 待って game_state を確定させてから手を選ぶ。
-                    // EB/EW/ED は応答不要なので S_RECV へ。それ以外は S_TX。
-                    if (is_sb || (is_mo && cd_parse_valid) || is_pa) begin
-                        state <= S_WAIT_GS;
-                    end else if (is_eb || is_ew || is_ed) begin
+                    if (buf_len == 8'd0) begin
+                        // 空行 (CR+LF のみ) → サイレント破棄 (RUP v0.2 §5.1)
                         state <= S_RECV;
                     end else begin
-                        state <= S_TX;
+                        // TX モードと index/end をセット (デフォルトは ROM 経路)
+                        tx_mode <= TX_MODE_ROM;
+                        if (is_pi) begin
+                            tx_idx <= {1'b0, ROM_PO_OFF};
+                            tx_end <= {1'b0, ROM_PO_OFF + ROM_PO_LEN};
+                        end else if (is_ve) begin
+                            tx_idx <= {1'b0, ROM_VE_OFF};
+                            tx_end <= {1'b0, ROM_VE_OFF + ROM_VE_LEN};
+                        end else begin
+                            tx_idx <= {1'b0, ROM_ER_OFF};
+                            tx_end <= {1'b0, ROM_ER_OFF + ROM_ER_LEN};
+                        end
+                        `ifdef SIMULATION
+                        if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_DISPATCH is={pi=%b ve=%b sb=%b sw=%b mo=%b} cd_valid=%b parse_bit=%0d flip=%016h tx_mode=%0d tx=%0d/%0d",
+                            `__LINE__, dbg_cycle,
+                            is_pi, is_ve, is_sb, is_sw, is_mo,
+                            cd_parse_valid, cd_parse_bit, fc_flip,
+                            tx_mode, tx_idx, tx_end);
+                        `endif
+
+                        // SB/SW を受けたら game_state を初期化する。
+                        // gs_cmd_init は 1 cycle のみ立てる (default 0 で次 cycle 戻る)
+                        if (is_sb) begin
+                            gs_cmd_init  <= 1'b1;
+                            gs_init_side <= 1'b0;   // Black
+                        end else if (is_sw) begin
+                            gs_cmd_init  <= 1'b1;
+                            gs_init_side <= 1'b1;   // White
+                        end
+                        // MO<xy> を受けたら相手の駒を盤面に置く。
+                        // fc_flip で挟まれた自分の駒を相手色に反転する。
+                        //   - my_side=0 (Black): opp=White
+                        //       white += move + flip、black -= flip
+                        //   - my_side=1 (White): opp=Black
+                        //       black += move + flip、white -= flip
+                        //   - 不正座標 (cd_parse_valid=0) の場合は何もしない
+                        if (is_mo && cd_parse_valid) begin
+                            gs_cmd_set_board <= 1'b1;
+                            if (gs_my_side == 1'b0) begin
+                                gs_in_white <= gs_white | (64'd1 << cd_parse_bit) | fc_flip;
+                                gs_in_black <= gs_black & ~fc_flip;
+                            end else begin
+                                gs_in_black <= gs_black | (64'd1 << cd_parse_bit) | fc_flip;
+                                gs_in_white <= gs_white & ~fc_flip;
+                            end
+                        end
+                        // EB/EW/ED: 終局 → IDLE 復帰、応答なし
+                        if (is_eb || is_ew || is_ed) begin
+                            gs_cmd_set_phase <= 1'b1;
+                            gs_in_phase      <= PHASE_IDLE;
+                        end
+                        // 自分の手番開始 (SB / 相手 MO 受信 / 相手 PA 受信) なら
+                        // 1 cycle 待って game_state を確定させてから手を選ぶ。
+                        // SW/EB/EW/ED は応答不要 (RUP v0.2 通知) なので S_RECV へ。
+                        // それ以外は S_TX。
+                        if (is_sb || (is_mo && cd_parse_valid) || is_pa) begin
+                            state <= S_WAIT_GS;
+                        end else if (is_sw || is_eb || is_ew || is_ed) begin
+                            state <= S_RECV;
+                        end else begin
+                            state <= S_TX;
+                        end
                     end
                 end
                 S_WAIT_GS: begin

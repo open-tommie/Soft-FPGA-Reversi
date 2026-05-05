@@ -1,7 +1,7 @@
 # 各 RTL モジュールごとの cocotb サブディレクトリを順に回す top-level wrapper。
 # scripts/test-unit.sh から呼び出される。
 
-SUBDIRS := proto legal_bb coord pick_lsb game_state flip_calc
+SUBDIRS := proto legal_bb coord pick_lsb pick_max_gain game_state flip_calc
 
 .PHONY: all clean $(SUBDIRS)
 
