@@ -46,9 +46,13 @@ file(GLOB RTL_SOURCES CONFIGURE_DEPENDS "${RTL_DIR}/*.v" "${RTL_DIR}/*.sv")
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${VERILATED_DIR}
 )
+# アルゴリズム選択: cmake -DPICK_STRATEGY=1 で切り替え (0=pick_lsb, 1=pick_max_gain)
+set(PICK_STRATEGY 0 CACHE STRING "0=pick_lsb  1=pick_max_gain")
+
 execute_process(
     COMMAND ${VERILATOR_BIN} --cc --no-trace --no-timing
             -DSIMULATION
+            -GPICK_STRATEGY=${PICK_STRATEGY}
             -y ${RTL_DIR}
             --Mdir ${VERILATED_DIR}
             ${RTL_DIR}/othello_top.v

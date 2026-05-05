@@ -29,9 +29,18 @@ USER_UID=$(id -u) USER_GID=$(id -g) \
 ### ファームウェアビルド
 
 ```bash
+./scripts/doBuildPico.sh   # doVersionUp.sh → build-pico.sh を一括実行
+# または
 ./scripts/build-pico.sh
-# → firmware/build/firmware.uf2 が生成される
 ```
+
+**両アルゴリズム分が同時にビルドされる**（[`firmware/CMakeLists.txt`](../firmware/CMakeLists.txt) の
+`add_reversi_firmware` を2回呼び出し）:
+
+| 成果物 | アルゴリズム | `PICK_STRATEGY` |
+| --- | --- | --- |
+| `firmware/build/firmware_lsb.uf2` | `pick_lsb` — 行優先最初の合法手 | 0 |
+| `firmware/build/firmware_max_gain.uf2` | `pick_max_gain` — 反転駒数最大 | 1 |
 
 クリーンビルドが必要な場合:
 
@@ -53,7 +62,8 @@ rm -rf firmware/build && ./scripts/build-pico.sh
 事前に Probe を WSL2 に attach 済みであること（→ [02-準備](02-準備.md) の usbipd 手順）。
 
 ```bash
-./scripts/flash.sh
+./scripts/flash.sh                                        # firmware_lsb（デフォルト）
+./scripts/flash.sh firmware/build/firmware_max_gain.elf  # pick_max_gain を書き込む
 # → Programming → Verified OK → shutdown
 ```
 

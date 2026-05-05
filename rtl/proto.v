@@ -85,8 +85,14 @@ module proto #(
     // CR+LF (\r\n) は ROM が自動付加するため文字列には含めない。
     localparam        PO_STR       = "+PI";
     localparam integer PO_STR_CHARS = 3;
-    localparam        VE_STR       = "+VE02SW-FPGA-pico2-reversi-01.54";
-    localparam integer VE_STR_CHARS = 32;
+    localparam        VE_STR_01       = "+VE02SW-FPGA-pico2-reversi-01-lsb.55";
+    localparam        VE_STR_02       = "+VE02SW-FPGA-pico2-reversi-02-max_gain.55";
+    localparam integer VE_STR_01_CHARS = 36;
+    localparam integer VE_STR_02_CHARS = 41;
+    localparam integer VE_STR_CHARS   = (PICK_STRATEGY == 0) ? VE_STR_01_CHARS : VE_STR_02_CHARS;
+    /* verilator lint_off WIDTHEXPAND */
+    localparam        VE_STR          = (PICK_STRATEGY == 0) ? VE_STR_01 : VE_STR_02;
+    /* verilator lint_on WIDTHEXPAND */
     localparam        ER_STR       = "-01 unknown";
     localparam integer ER_STR_CHARS = 11;
     localparam        PA_STR       = "PA";
