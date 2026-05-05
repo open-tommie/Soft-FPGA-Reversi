@@ -71,12 +71,15 @@ async def pi_returns_po(dut) -> None:
 
 @cocotb.test()
 async def ve_returns_version(dut) -> None:
-    """VE\\r\\n → +VE02SW-FPGA-pico2-reversi-01\\r\\n"""
+    """VE\\r\\n → +VE02SW-FPGA-pico2-reversi-01[.NNN]\\r\\n"""
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     await reset(dut)
     await send_line(dut, b"VE\r\n")
     resp = await collect_response(dut)
-    assert resp == b"+VE02SW-FPGA-pico2-reversi-01\r\n", f"期待 +VE02SW-FPGA-pico2-reversi-01 / 実際 {resp!r}"
+    base = b"+VE02SW-FPGA-pico2-reversi-01"
+    assert resp.startswith(base) and resp.endswith(b"\r\n"), (
+        f"期待 {base!r}[.NNN]\\r\\n / 実際 {resp!r}"
+    )
 
 
 @cocotb.test()
@@ -665,6 +668,35 @@ async def end_then_sb_restarts_game(dut) -> None:
     assert mo_line == b"MOd3\r\n", f"再開後の初手: {mo_line!r}"
     assert int(dut.u_game_state.black.value) != 0
     assert int(dut.u_game_state.phase.value) == PHASE_WAIT_OPP
+
+
+# ===== RUP v0.2: CA (Capability) =====
+
+CA_EXPECTED = b"+CA PI VE CA SB SW MO PA EB EW ED XI XB\r\n"
+
+
+@cocotb.test()
+async def ca_returns_capability_list(dut) -> None:
+    """CA\\r\\n → +CA PI VE CA SB SW MO PA EB EW ED XI XB\\r\\n"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"CA\r\n")
+    resp = await collect_response(dut, max_ticks=120)
+    assert resp == CA_EXPECTED, f"期待 {CA_EXPECTED!r} / 実際 {resp!r}"
+
+
+@cocotb.test()
+async def ca_includes_known_commands(dut) -> None:
+    """+CA 応答に必須コマンドが含まれる。"""
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
+    await reset(dut)
+    await send_line(dut, b"CA\r\n")
+    resp = await collect_response(dut, max_ticks=120)
+    assert resp.startswith(b"+CA "), f"+CA で始まること: {resp!r}"
+    tokens = resp[4:].rstrip(b"\r\n").split(b" ")
+    for cmd in (b"PI", b"VE", b"CA", b"SB", b"SW", b"MO", b"PA",
+                b"EB", b"EW", b"ED", b"XI", b"XB"):
+        assert cmd in tokens, f"+CA にトークン {cmd!r} が含まれない: {resp!r}"
 
 
 # ===== RUP v0.2: 空行サイレント破棄 =====

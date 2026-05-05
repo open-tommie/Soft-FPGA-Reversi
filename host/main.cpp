@@ -143,7 +143,7 @@ void bench_report(FILE* out, bool verbose) {
             ns_per_tick,
             soft_clk_hz / 1e6);
     } else {
-        fprintf(out, "BM clk=%.3fMHz tick=%.1fns\r\n",
+        fprintf(out, "+XB clk=%.3fMHz tick=%.1fns\r\n",
             soft_clk_hz / 1e6, ns_per_tick);
         std::fflush(out);
     }
@@ -222,7 +222,7 @@ void id_report(FILE* out) {
     date_iso(bld);
     char pf[48];
     platform_str(pf, sizeof(pf));
-    fprintf(out, "ID pf=%s git=%s vl=%s bld=%s\r\n",
+    fprintf(out, "+XI pf=%s git=%s vl=%s bld=%s\r\n",
             pf, GIT_HASH, VERILATOR_VER, bld);
     std::fflush(out);
 }
@@ -293,9 +293,9 @@ int main(int argc, char** argv) {
     constexpr int kSettleCycles    = 4;
     constexpr int kMaxSilentCycles = 16;
 
-    // BM/ID コマンドインターセプト用ラインバッファ。
+    // XB/XI コマンドインターセプト用ラインバッファ (RUP v0.2 X* 拡張)。
     // 行終端は CR+LF (etc/protocol.md)。stdin から CR+LF までを 1 行として
-    // 区切り、"BM\r\n" / "ID\r\n" は DUT に渡さず C++ 側で応答する。
+    // 区切り、"XB\r\n" / "XI\r\n" は DUT に渡さず C++ 側で応答する。
     // それ以外の行はバイト列をそのまま (CR+LF も含めて) DUT に流す。
     char rx_linebuf[36] = {};
     int  rx_linebuf_len = 0;
@@ -316,11 +316,11 @@ int main(int argc, char** argv) {
                     if (b == '\n') {
                         const char c0 = rx_linebuf[0];
                         const char c1 = (rx_linebuf_len >= 2) ? rx_linebuf[1] : 0;
-                        if (c0 == 'B' && c1 == 'M') {
+                        if (c0 == 'X' && c1 == 'B') {
                             bench_report(stdout, false);
                             rx_linebuf_len = 0;
                             last_was_crlf  = true;
-                        } else if (c0 == 'I' && c1 == 'D') {
+                        } else if (c0 == 'X' && c1 == 'I') {
                             id_report(stdout);
                             rx_linebuf_len = 0;
                             last_was_crlf  = true;

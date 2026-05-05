@@ -82,60 +82,70 @@ module proto #(
 
     // ----- 連結 ROM -----
     // 各応答文字列。★ 変えるときは *_STR と *_STR_CHARS の 2 箇所だけ更新する ★
-    // LF (\n) は ROM が自動付加するため文字列には含めない。
+    // CR+LF (\r\n) は ROM が自動付加するため文字列には含めない。
     localparam        PO_STR       = "+PI";
     localparam integer PO_STR_CHARS = 3;
-    localparam        VE_STR       = "+VE02SW-FPGA-pico2-reversi-01";
-    localparam integer VE_STR_CHARS = 29;
+    localparam        VE_STR       = "+VE02SW-FPGA-pico2-reversi-01.54";
+    localparam integer VE_STR_CHARS = 32;
     localparam        ER_STR       = "-01 unknown";
     localparam integer ER_STR_CHARS = 11;
     localparam        PA_STR       = "PA";
     localparam integer PA_STR_CHARS = 2;
+    localparam        CA_STR       = "+CA PI VE CA SB SW MO PA EB EW ED XI XB";
+    localparam integer CA_STR_CHARS = 39;
 
-    localparam [5:0] ROM_PO_OFF = 6'd0;
+    localparam [6:0] ROM_PO_OFF = 7'd0;
     /* verilator lint_off WIDTHTRUNC */
-    localparam [5:0] ROM_PO_LEN = PO_STR_CHARS + 2;   // +CR+LF (integer→6bit は意図的)
-    localparam [5:0] ROM_VE_LEN = VE_STR_CHARS + 2;
-    localparam [5:0] ROM_ER_LEN = ER_STR_CHARS + 2;
-    localparam [5:0] ROM_PA_LEN = PA_STR_CHARS + 2;
+    localparam [6:0] ROM_PO_LEN = PO_STR_CHARS + 2;   // +CR+LF (integer→7bit は意図的)
+    localparam [6:0] ROM_VE_LEN = VE_STR_CHARS + 2;
+    localparam [6:0] ROM_ER_LEN = ER_STR_CHARS + 2;
+    localparam [6:0] ROM_PA_LEN = PA_STR_CHARS + 2;
+    localparam [6:0] ROM_CA_LEN = CA_STR_CHARS + 2;
     /* verilator lint_on WIDTHTRUNC */
-    localparam [5:0] ROM_VE_OFF = ROM_PO_OFF + ROM_PO_LEN;
-    localparam [5:0] ROM_ER_OFF = ROM_VE_OFF + ROM_VE_LEN;
-    localparam [5:0] ROM_PA_OFF = ROM_ER_OFF + ROM_ER_LEN;
+    localparam [6:0] ROM_VE_OFF = ROM_PO_OFF + ROM_PO_LEN;
+    localparam [6:0] ROM_ER_OFF = ROM_VE_OFF + ROM_VE_LEN;
+    localparam [6:0] ROM_PA_OFF = ROM_ER_OFF + ROM_ER_LEN;
+    localparam [6:0] ROM_CA_OFF = ROM_PA_OFF + ROM_PA_LEN;
 
     // resp_rom(i): ROM インデックス i に対応する応答バイトを返す。
     // 各文字列 localparam からバイト抽出して生成する (Verilog 文字列は MSB が先頭文字)。
-    // WIDTHEXPAND は off[5:0] を integer 算術式で使う意図的な拡張。
+    // WIDTHEXPAND は off[6:0] を integer 算術式で使う意図的な拡張。
     /* verilator lint_off WIDTHEXPAND */
-    function automatic [7:0] resp_rom(input [5:0] i);
-        reg     [5:0] off;
+    function automatic [7:0] resp_rom(input [6:0] i);
+        reg     [6:0] off;
         integer       bit_off;
     begin
         resp_rom = 8'h00;
         if (i < ROM_VE_OFF) begin
             off     = i - ROM_PO_OFF;
             bit_off = (PO_STR_CHARS - 1 - off) * 8;
-            if      (i < ROM_VE_OFF - 6'd2) resp_rom = PO_STR[bit_off +: 8];
-            else if (i < ROM_VE_OFF - 6'd1) resp_rom = 8'h0D;  // CR
+            if      (i < ROM_VE_OFF - 7'd2) resp_rom = PO_STR[bit_off +: 8];
+            else if (i < ROM_VE_OFF - 7'd1) resp_rom = 8'h0D;  // CR
             else                             resp_rom = 8'h0A;  // LF
         end else if (i < ROM_ER_OFF) begin
             off     = i - ROM_VE_OFF;
             bit_off = (VE_STR_CHARS - 1 - off) * 8;
-            if      (i < ROM_ER_OFF - 6'd2) resp_rom = VE_STR[bit_off +: 8];
-            else if (i < ROM_ER_OFF - 6'd1) resp_rom = 8'h0D;  // CR
+            if      (i < ROM_ER_OFF - 7'd2) resp_rom = VE_STR[bit_off +: 8];
+            else if (i < ROM_ER_OFF - 7'd1) resp_rom = 8'h0D;  // CR
             else                             resp_rom = 8'h0A;  // LF
         end else if (i < ROM_PA_OFF) begin
             off     = i - ROM_ER_OFF;
             bit_off = (ER_STR_CHARS - 1 - off) * 8;
-            if      (off < ROM_ER_LEN - 6'd2) resp_rom = ER_STR[bit_off +: 8];
-            else if (off < ROM_ER_LEN - 6'd1) resp_rom = 8'h0D;  // CR
+            if      (off < ROM_ER_LEN - 7'd2) resp_rom = ER_STR[bit_off +: 8];
+            else if (off < ROM_ER_LEN - 7'd1) resp_rom = 8'h0D;  // CR
             else                               resp_rom = 8'h0A;  // LF
-        end else begin
+        end else if (i < ROM_CA_OFF) begin
             off     = i - ROM_PA_OFF;
             bit_off = (PA_STR_CHARS - 1 - off) * 8;
             if      (i < ROM_PA_OFF + PA_STR_CHARS) resp_rom = PA_STR[bit_off +: 8];
-            else if (off < ROM_PA_LEN - 6'd1)       resp_rom = 8'h0D;  // CR
+            else if (off < ROM_PA_LEN - 7'd1)       resp_rom = 8'h0D;  // CR
             else                                     resp_rom = 8'h0A;  // LF
+        end else begin
+            off     = i - ROM_CA_OFF;
+            bit_off = (CA_STR_CHARS - 1 - off) * 8;
+            if      (off < CA_STR_CHARS)         resp_rom = CA_STR[bit_off +: 8];
+            else if (off < ROM_CA_LEN - 7'd1)    resp_rom = 8'h0D;  // CR
+            else                                  resp_rom = 8'h0A;  // LF
         end
     end
     endfunction
@@ -195,6 +205,7 @@ module proto #(
     // MO<xy>: 4 byte (M, O, col_char, row_char)。座標妥当性は cd_parse_valid で別判定
     wire is_mo = (buf_len == 8'd4) && (buf_mem[0] == "M") && (buf_mem[1] == "O");
     wire is_pa = (buf_len == 8'd2) && (buf_mem[0] == "P") && (buf_mem[1] == "A");
+    wire is_ca = (buf_len == 8'd2) && (buf_mem[0] == "C") && (buf_mem[1] == "A");
     wire is_eb = (buf_len == 8'd2) && (buf_mem[0] == "E") && (buf_mem[1] == "B");
     wire is_ew = (buf_len == 8'd2) && (buf_mem[0] == "E") && (buf_mem[1] == "W");
     wire is_ed = (buf_len == 8'd2) && (buf_mem[0] == "E") && (buf_mem[1] == "D");
@@ -359,19 +370,22 @@ module proto #(
                         // TX モードと index/end をセット (デフォルトは ROM 経路)
                         tx_mode <= TX_MODE_ROM;
                         if (is_pi) begin
-                            tx_idx <= {1'b0, ROM_PO_OFF};
-                            tx_end <= {1'b0, ROM_PO_OFF + ROM_PO_LEN};
+                            tx_idx <= ROM_PO_OFF;
+                            tx_end <= ROM_PO_OFF + ROM_PO_LEN;
                         end else if (is_ve) begin
-                            tx_idx <= {1'b0, ROM_VE_OFF};
-                            tx_end <= {1'b0, ROM_VE_OFF + ROM_VE_LEN};
+                            tx_idx <= ROM_VE_OFF;
+                            tx_end <= ROM_VE_OFF + ROM_VE_LEN;
+                        end else if (is_ca) begin
+                            tx_idx <= ROM_CA_OFF;
+                            tx_end <= ROM_CA_OFF + ROM_CA_LEN;
                         end else begin
-                            tx_idx <= {1'b0, ROM_ER_OFF};
-                            tx_end <= {1'b0, ROM_ER_OFF + ROM_ER_LEN};
+                            tx_idx <= ROM_ER_OFF;
+                            tx_end <= ROM_ER_OFF + ROM_ER_LEN;
                         end
                         `ifdef SIMULATION
-                        if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_DISPATCH is={pi=%b ve=%b sb=%b sw=%b mo=%b} cd_valid=%b parse_bit=%0d flip=%016h tx_mode=%0d tx=%0d/%0d",
+                        if (dbg_en) $strobe("proto.v:%0d [time=%0d] S_DISPATCH is={pi=%b ve=%b ca=%b sb=%b sw=%b mo=%b} cd_valid=%b parse_bit=%0d flip=%016h tx_mode=%0d tx=%0d/%0d",
                             `__LINE__, dbg_cycle,
-                            is_pi, is_ve, is_sb, is_sw, is_mo,
+                            is_pi, is_ve, is_ca, is_sb, is_sw, is_mo,
                             cd_parse_valid, cd_parse_bit, fc_flip,
                             tx_mode, tx_idx, tx_end);
                         `endif
@@ -461,8 +475,8 @@ module proto #(
                         gs_cmd_set_phase <= 1'b1;
                         gs_in_phase      <= PHASE_WAIT_OPP;
                         tx_mode <= TX_MODE_ROM;
-                        tx_idx  <= {1'b0, ROM_PA_OFF};
-                        tx_end  <= {1'b0, ROM_PA_OFF + ROM_PA_LEN};
+                        tx_idx  <= ROM_PA_OFF;
+                        tx_end  <= ROM_PA_OFF + ROM_PA_LEN;
                     end
                     state <= S_TX;
                 end
@@ -470,7 +484,7 @@ module proto #(
                     if (tx_idx < tx_end) begin
                         // tx_mode で source を切替
                         case (tx_mode)
-                            TX_MODE_ROM: tx_byte <= resp_rom(tx_idx[5:0]);
+                            TX_MODE_ROM: tx_byte <= resp_rom(tx_idx[6:0]);
                             TX_MODE_MO: begin
                                 // "M", "O", col, row, "\r", "\n"
                                 case (tx_idx[2:0])

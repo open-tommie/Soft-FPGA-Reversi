@@ -70,13 +70,13 @@ picocom -b 115200 /dev/ttyACM0
 Windows 側で見るなら `usbipd detach --busid <Pico>` してから VSCode の
 Serial Monitor で COM ポートを開く。
 
-## ID コマンド（デバイス情報）
+## XI コマンド（デバイス情報）
 
-`ID\r\n` を送るとデバイス情報を返す。
+`XI\r\n` を送るとデバイス情報を返す（RUP v0.2 拡張コマンド）。
 
 ```text
-送信: ID
-応答: ID pf=rp2350-arm-s flash=4096KB prog=128KB(3%) ram=520KB bss=48KB(9%) clk=150MHz chip=B2 git=abc1234 bld=2026-04-29
+送信: XI
+応答: +XI pf=rp2350-arm-s flash=4096KB prog=128KB(3%) ram=520KB bss=48KB(9%) clk=150MHz chip=B2 git=abc1234 bld=2026-04-29
 ```
 
 | フィールド | 内容 | 取得元 |
