@@ -85,13 +85,17 @@ module proto #(
     // CR+LF (\r\n) は ROM が自動付加するため文字列には含めない。
     localparam        PO_STR       = "+PI";
     localparam integer PO_STR_CHARS = 3;
-    localparam        VE_STR_01       = "+VE02SW-FPGA-pico2-reversi-01-lsb.55";
-    localparam        VE_STR_02       = "+VE02SW-FPGA-pico2-reversi-02-max_gain.55";
+    localparam        VE_STR_01       = "+VE02SW-FPGA-pico2-reversi-01-lsb.56";
+    localparam        VE_STR_02       = "+VE02SW-FPGA-pico2-reversi-02-max_gain.56";
+    localparam        VE_STR_03       = "+VE02SW-FPGA-pico2-reversi-03-corner.56";
     localparam integer VE_STR_01_CHARS = 36;
     localparam integer VE_STR_02_CHARS = 41;
-    localparam integer VE_STR_CHARS   = (PICK_STRATEGY == 0) ? VE_STR_01_CHARS : VE_STR_02_CHARS;
+    localparam integer VE_STR_03_CHARS = 39;
+    localparam integer VE_STR_CHARS   = (PICK_STRATEGY == 0) ? VE_STR_01_CHARS :
+                                        (PICK_STRATEGY == 1) ? VE_STR_02_CHARS : VE_STR_03_CHARS;
     /* verilator lint_off WIDTHEXPAND */
-    localparam        VE_STR          = (PICK_STRATEGY == 0) ? VE_STR_01 : VE_STR_02;
+    localparam        VE_STR          = (PICK_STRATEGY == 0) ? VE_STR_01 :
+                                        (PICK_STRATEGY == 1) ? VE_STR_02 : VE_STR_03;
     /* verilator lint_on WIDTHEXPAND */
     localparam        ER_STR       = "-01 unknown";
     localparam integer ER_STR_CHARS = 11;
@@ -265,6 +269,11 @@ module proto #(
         if (PICK_STRATEGY == 1) begin : gen_pick_max_gain
             pick_max_gain u_pick (
                 .in_bits(lb_legal), .own(ps_own), .opp(ps_opp),
+                .valid(ps_valid), .index(ps_index), .one_hot(ps_one_hot)
+            );
+        end else if (PICK_STRATEGY == 2) begin : gen_pick_corner
+            pick_corner u_pick (
+                .in_bits(lb_legal),
                 .valid(ps_valid), .index(ps_index), .one_hot(ps_one_hot)
             );
         end else begin : gen_pick_lsb

@@ -12,16 +12,20 @@ usage() {
   scripts/doBuildPico.sh --flash 1         # --flash lsb と同じ
   scripts/doBuildPico.sh --flash max_gain  # ビルド後 pick_max_gain を書き込む
   scripts/doBuildPico.sh --flash 2         # --flash max_gain と同じ
+  scripts/doBuildPico.sh --flash corner    # ビルド後 pick_corner を書き込む
+  scripts/doBuildPico.sh --flash 3         # --flash corner と同じ
 
 ビルド成果物:
   firmware/build/firmware_lsb.uf2       -- pick_lsb      (行優先最初の合法手)
   firmware/build/firmware_max_gain.uf2  -- pick_max_gain (反転駒数最大の合法手)
+  firmware/build/firmware_corner.uf2    -- pick_corner   (角優先)
 
 BOOTSEL で書き込む場合:
   1. Pico 2 の BOOTSEL ボタンを押しながら USB 接続
   2. RPI-RP2350 ドライブに .uf2 をドラッグ＆ドロップ
      - pick_lsb:      firmware/build/firmware_lsb.uf2
-     - pick_gain: firmware/build/firmware_max_gain.uf2
+     - pick_max_gain: firmware/build/firmware_max_gain.uf2
+     - pick_corner:   firmware/build/firmware_corner.uf2
 EOF
 }
 
@@ -37,6 +41,7 @@ while [[ $# -gt 0 ]]; do
             case "${1:-}" in
                 lsb|1)      FLASH_ELF="firmware/build/firmware_lsb.elf";      shift ;;
                 max_gain|2) FLASH_ELF="firmware/build/firmware_max_gain.elf"; shift ;;
+                corner|3)   FLASH_ELF="firmware/build/firmware_corner.elf";   shift ;;
             esac
             ;;
         *)

@@ -13,8 +13,9 @@
 `default_nettype none
 
 module othello_top #(
-    // 0 = pick_lsb (行優先最初の合法手)
+    // 0 = pick_lsb      (行優先最初の合法手)
     // 1 = pick_max_gain (反転駒数最大の合法手)
+    // 2 = pick_corner   (角優先、なければ pick_lsb)
     parameter PICK_STRATEGY = 0
 ) (
     input  wire        clk,

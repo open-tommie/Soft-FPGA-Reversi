@@ -34,13 +34,14 @@ USER_UID=$(id -u) USER_GID=$(id -g) \
 ./scripts/build-pico.sh
 ```
 
-**両アルゴリズム分が同時にビルドされる**（[`firmware/CMakeLists.txt`](../firmware/CMakeLists.txt) の
-`add_reversi_firmware` を2回呼び出し）:
+**全アルゴリズム分が同時にビルドされる**（[`firmware/CMakeLists.txt`](../firmware/CMakeLists.txt) の
+`add_reversi_firmware` を複数回呼び出し）:
 
 | 成果物 | アルゴリズム | `PICK_STRATEGY` |
 | --- | --- | --- |
 | `firmware/build/firmware_lsb.uf2` | `pick_lsb` — 行優先最初の合法手 | 0 |
 | `firmware/build/firmware_max_gain.uf2` | `pick_max_gain` — 反転駒数最大 | 1 |
+| `firmware/build/firmware_corner.uf2` | `pick_corner` — 角優先 | 2 |
 
 クリーンビルドが必要な場合:
 
@@ -64,6 +65,7 @@ rm -rf firmware/build && ./scripts/build-pico.sh
 ```bash
 ./scripts/flash.sh                                        # firmware_lsb（デフォルト）
 ./scripts/flash.sh firmware/build/firmware_max_gain.elf  # pick_max_gain を書き込む
+./scripts/flash.sh firmware/build/firmware_corner.elf    # pick_corner を書き込む
 # → Programming → Verified OK → shutdown
 ```
 

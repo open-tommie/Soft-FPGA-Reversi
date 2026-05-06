@@ -127,3 +127,4 @@ endfunction()
 # --- ターゲット定義 ---
 add_reversi_firmware(firmware_lsb      0)  # 行優先最初の合法手
 add_reversi_firmware(firmware_max_gain 1)  # 反転駒数最大の合法手
+add_reversi_firmware(firmware_corner   2)  # 角優先
